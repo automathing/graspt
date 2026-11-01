@@ -1,5 +1,7 @@
 # Graspt
 
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/automathing/graspt?quickstart=1)
+
 **Allocentric Topological Proof Navigation for Lean 4 + Mathlib, powered by AI Coding Agents (`pi` + Meta Muse).**
 
 > *"A geometric and topological metaphor for the space of what humanity already knows, and what can be reached just by combining existing ideas."*
@@ -73,7 +75,29 @@ flowchart LR
 
 ## Quickstart
 
-### 1. Build the Lean 4 Tracer & Mathlib Atlas
+### Option A: One-Click Interactive Demo in GitHub Codespaces (Recommended)
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/automathing/graspt?quickstart=1)
+
+Clicking **Open in GitHub Codespaces** provisions a reproducible 4-core / 16 GB environment ([`.devcontainer/devcontainer.json`](./.devcontainer/devcontainer.json) + [`.devcontainer/setup.sh`](./.devcontainer/setup.sh)) that automatically:
+1. Installs **`elan`** + **Lean 4 (`leanprover/lean4:v4.36.0-rc2`)** and the official `leanprover.lean4` VS Code extension.
+2. Installs **`pi` (`@earendil-works/pi-coding-agent`)** pre-configured for **Meta Muse (`meta/muse-spark-1.3`)**.
+3. Fetches the precompiled **Mathlib `.olean` cache**, compiles `graspt-trace`, `graspt-atlas`, and `Demo`, and generates the 253,628-declaration **Mathlib Atlas** (`lean/.graspt/atlas/atlas.json`).
+4. Builds and links the **Graspt** VS Code extension (`graspt.graspt`) and opens [`lean/Demo/LocalLayout.lean`](./lean/Demo/LocalLayout.lean) ready for live exploration.
+
+---
+
+### Option B: Local Reproducible Build
+
+Run the self-contained setup script from the repository root:
+
+```bash
+bash .devcontainer/setup.sh
+```
+
+Or run the steps manually:
+
+#### 1. Build the Lean 4 Tracer & Mathlib Atlas
 
 ```bash
 cd lean
@@ -91,14 +115,16 @@ cd lean
 lake exe graspt-trace Demo/LocalLayout.lean
 ```
 
-### 2. Build & Install the VS Code Extension
+#### 2. Build & Install the VS Code Extension
 
 ```bash
 cd extension
-npm install
+npm ci
 npm run typecheck
 npm run build
 ```
+
+---
 
 ### 3. Configure Meta Muse in `pi` & Launch the Map
 
