@@ -1,0 +1,52 @@
+# ── Dependencies ─────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.*
+
+# ── Build output (TypeScript) ────────────────────────────────
+dist/
+*.tsbuildinfo
+coverage/
+.nyc_output/
+
+# ── Graspt runtime state ─────────────────────────────────────
+# Traces, layouts, worktrees and caches generated when running
+# Graspt against a repo. Never commit these.
+.graspt/
+graspt-store/
+
+# ── Lean / Lake build artifacts ──────────────────────────────
+# Mathlib + toolchain caches live here (gigabytes). The Lean
+# sources (lakefile, lean-toolchain, *.lean) stay tracked.
+.lake/
+.elan/
+
+# ── Environment & secrets ────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.local
+
+# ── Logs & temp ──────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+tmp/
+*.tmp
+*.vsix
+
+# ── Editors & OS ─────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# notes
+.agents/skills/
+docs/decisions

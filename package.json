@@ -1,0 +1,47 @@
+{
+  "name": "graspt",
+  "version": "0.2.0",
+  "description": "Allocentric topological proof navigation for Lean 4 + Mathlib — npm CLI launching a localhost website. Read-only exploration; Lean-verified ghost previews only.",
+  "license": "MIT",
+  "author": "Graspt contributors",
+  "homepage": "https://github.com/automathing/graspt",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/automathing/graspt.git"
+  },
+  "keywords": [
+    "lean4",
+    "mathlib",
+    "theorem-proving",
+    "proof-navigation",
+    "topological-slam"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "commonjs",
+  "bin": {
+    "graspt": "dist/apps/cli/graspt.js"
+  },
+  "files": [
+    "dist/apps",
+    "dist/packages",
+    "apps/web",
+    "fixtures/demo"
+  ],
+  "scripts": {
+    "prepack": "npm run build",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test \"dist/tests/*.test.js\"",
+    "start": "npm run build && node dist/apps/cli/graspt.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.5.0"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0.108",
+    "ai": "^7.0.162"
+  }
+}

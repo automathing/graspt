@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Graspt — explore Lean 4 proofs as a navigable map of goals and landmarks.">
+<title>Graspt — Proof Atlas</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="app-header">
+  <a class="brand" href="#" id="brand-home" aria-label="Graspt atlas home">
+    <span class="brand-mark" aria-hidden="true">G</span>
+    <span class="brand-copy"><strong>Graspt</strong><small>Proof Atlas</small></span>
+  </a>
+  <div class="header-status" aria-label="Application status">
+    <span class="status-dot" aria-hidden="true"></span>
+    <span>Read-only explorer</span>
+  </div>
+  <label class="repo-picker">Repository
+    <select id="repo-select" aria-label="Repository"></select>
+  </label>
+</header>
+
+<section class="source-panel" aria-labelledby="source-title">
+  <div class="source-intro">
+    <h2 id="source-title">Open a proof source</h2>
+    <p>Browse a local Lean project or clone a remote repository into temporary storage.</p>
+  </div>
+  <div class="source-actions">
+    <div class="source-group">
+      <label for="folder-input">Local folder</label>
+      <div class="input-row">
+        <input id="folder-input" type="text" placeholder="/path/to/lean-project" autocomplete="off">
+        <button id="open-folder" type="button">Open folder</button>
+      </div>
+    </div>
+    <div class="source-divider" aria-hidden="true">or</div>
+    <div class="source-group source-group-wide">
+      <label for="clone-input">Git repository</label>
+      <div class="input-row">
+        <input id="clone-input" type="url" placeholder="https://github.com/owner/lean-repo.git" autocomplete="off">
+        <button id="clone-repo" type="button">Clone to /tmp</button>
+      </div>
+    </div>
+  </div>
+  <p id="job-status" class="job-status" role="status" aria-live="polite"></p>
+</section>
+
+<main>
+  <section id="atlas-view" aria-labelledby="atlas-title">
+    <div class="page-head">
+      <div>
+        <p class="section-label">Known territory</p>
+        <h1 id="atlas-title">Explore the territory</h1>
+        <p id="atlas-stats" class="page-subtitle"></p>
+      </div>
+      <div class="head-actions">
+        <label class="search-box"><span class="sr-only">Search declarations</span>
+          <input id="decl-search" type="search" placeholder="Search declarations…" autocomplete="off">
+        </label>
+      </div>
+    </div>
+
+    <div class="metric-grid" aria-label="Repository summary">
+      <article class="metric-card"><span>Declarations</span><strong id="metric-decls">—</strong><small>Traced in this repository</small></article>
+      <article class="metric-card"><span>Landmarks</span><strong id="metric-landmarks">—</strong><small>Reusable known results</small></article>
+      <article class="metric-card"><span>Complete</span><strong id="metric-complete">—</strong><small>Declarations without frontiers</small></article>
+      <article class="metric-card"><span>Open frontiers</span><strong id="metric-frontiers">—</strong><small>Goals still to discharge</small></article>
+    </div>
+
+    <section class="content-section" aria-labelledby="legend-title">
+      <div class="section-heading">
+        <div><h2 id="legend-title">Landmark areas</h2><p>Colour identifies mathematical area. Shape identifies the node’s role.</p></div>
+      </div>
+      <div id="legend" class="legend" aria-label="Landmark area legend"></div>
+    </section>
+
+    <section class="content-section" aria-labelledby="decl-title">
+      <div class="section-heading">
+        <div><h2 id="decl-title">Declarations</h2><p>Select a declaration to inspect its proof as a map.</p></div>
+        <span id="decl-count" class="count-label"></span>
+      </div>
+      <div id="decl-list" class="decl-list"></div>
+      <p id="decl-empty" class="empty-state" hidden>No declarations match your search.</p>
+    </section>
+
+    <section class="content-section" aria-labelledby="landmark-title">
+      <div class="section-heading">
+        <div><h2 id="landmark-title">Most-used landmarks</h2><p>The known results this repository leans on most heavily.</p></div>
+      </div>
+      <div class="table-wrap">
+        <table id="landmark-table">
+          <thead><tr><th scope="col">Landmark</th><th scope="col">Area</th><th scope="col">Uses</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </section>
+
+  <section id="proof-view" hidden aria-labelledby="proof-title">
+    <div class="proof-toolbar">
+      <button id="back-atlas" type="button" class="button-secondary">← Back to atlas</button>
+      <div class="proof-heading">
+        <p class="section-label">Proof map</p>
+        <h1 id="proof-title"></h1>
+        <span id="proof-stats"></span>
+      </div>
+      <div class="toolbar-actions">
+        <button id="zoom-out" type="button" class="tool-button" aria-label="Zoom out">−</button>
+        <button id="zoom-reset" type="button" class="tool-button tool-button-text">Fit</button>
+        <button id="zoom-in" type="button" class="tool-button" aria-label="Zoom in">+</button>
+        <button id="walk-btn" type="button">Navigator walk</button>
+      </div>
+    </div>
+    <p id="walk-status" class="walk-status" role="status"></p>
+
+    <div class="proof-layout">
+      <section class="map-card" aria-label="Interactive proof map">
+        <div class="map-legend" aria-label="Map legend">
+          <span><i class="legend-shape goal"></i>Goal</span>
+          <span><i class="legend-shape landmark"></i>Landmark</span>
+          <span><i class="legend-shape frontier"></i>Frontier</span>
+          <span><i class="legend-shape move"></i>Move</span>
+          <span><i class="legend-shape known"></i>Grounded</span>
+        </div>
+        <div class="map-wrap"><svg id="map" role="group" aria-label="Proof map. Use Tab to move between nodes and Enter to select one."></svg></div>
+        <p class="map-hint">Pan by scrolling inside the map. Tab through nodes, press Enter to inspect one.</p>
+      </section>
+
+      <aside id="ego-panel" aria-labelledby="ego-title">
+        <p class="section-label">Egocentric view</p>
+        <h2 id="ego-title">Where am I?</h2>
+        <pre id="ego-centre">Click a goal node.</pre>
+        <div class="trail-block">
+          <h3>Trail from root</h3>
+          <p id="ego-trail">At the root goal.</p>
+        </div>
+        <div class="neighbours-block">
+          <h3>Nearest neighbours</h3>
+          <div id="ego-neighbours"><p class="empty-state">Select a goal to see what is near it.</p></div>
+        </div>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<footer id="chatbar">
+  <details class="agent-settings" id="agent-settings">
+    <summary><span id="agent-status">Chat: …</span><span class="settings-action">Connection settings</span></summary>
+    <div id="agent-bar">
+      <span id="key-form">
+        <input id="api-key-input" type="password" placeholder="Meta API key / MODEL_API_KEY" autocomplete="off" aria-label="Meta API key">
+        <button id="save-key" type="button">Save key</button>
+      </span>
+      <button id="clear-key" type="button" hidden>Clear saved key</button>
+      <label class="model-field">Model <input id="model-input" placeholder="muse-wonder-1.0" aria-label="Meta AI model"></label>
+      <button id="save-model" type="button" class="button-secondary">Set model</button>
+      <span id="key-status" role="status"></span>
+    </div>
+    <p class="chat-note">Meta AI answers directly through api.meta.ai. Citations are checked against the graph; tactic suggestions remain unverified until Lean checks them. Keys stay on the server and are never returned to the browser.</p>
+  </details>
+  <div id="chat-log" aria-live="polite"><p class="chat-placeholder">Ask about the current proof, a nearby landmark, or what remains open.</p></div>
+  <form id="chat-form">
+    <label class="sr-only" for="chat-input">Ask Meta AI about this proof</label>
+    <input id="chat-input" type="text" placeholder="Ask about this proof…" autocomplete="off">
+    <button type="submit">Ask</button>
+  </form>
+</footer>
+<script src="/app.js"></script>
+</body>
+</html>

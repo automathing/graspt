@@ -8,15 +8,16 @@
 //   known    – the sink: a branch is finished when it is grounded in the known
 //   frontier – a goal that is not yet grounded (`sorry`, or left unsolved)
 //
-// Coarse-graining contracts goals that sit on a linear chain (one move in, one move out)
-// according to the reader's level, so an expert sees structural pivots and a learner sees
-// every step. `pinned` goals (user unpacked) are never contracted; `chunked` goals (user
-// said "I grok this") always are.
+// One map per tracked lemma (declaration), at full step detail. Granularity is not a
+// model setting: the webview derives it from the viewport zoom, so zooming in reveals
+// minor moves and landmarks and zooming out hides them. The only contraction here is
+// explicit: `chunked` goals (user said "I grok this") are folded; `pinned` goals
+// (user unpacked) never are.
 
 import type { DeclTrace, Importance, MapEdge, MapNode, ProofMap, Step } from './types';
+import { canonicalGoalKey, detectLoopClosures, parseHypotheses } from './nav';
 
 export interface BuildOptions {
-  level: 1 | 2 | 3;
   importance?: Importance | null;
   landmarkThreshold: number;
   pinned?: Set<string>;
@@ -34,17 +35,52 @@ interface RawMove {
   sorry: boolean;
 }
 
-const PLUMBING = new Set([
-  'intro', 'intros', 'rintro', 'show', 'change', 'unfold', 'delta', 'dsimp', 'norm_cast',
-  'push_cast', 'clear', 'rename_i', 'subst', 'assumption', 'trivial', 'rfl', 'symm',
-  'exact_mod_cast', 'skip', 'with_reducible', 'beta_reduce', 'set_option',
-]);
-
 const MILESTONE = new Set([
   'have', 'obtain', 'suffices', 'induction', 'cases', 'rcases', 'constructor', 'refine',
   'use', 'exists', 'calc', 'by_contra', 'by_cases', 'contrapose', 'contrapose!', 'interval_cases',
   'fin_cases', 'match', 'let', 'set', 'wlog', 'induction\'', 'cases\'', 'apply', 'exact',
 ]);
+
+const TYPE_BOUNDARY = new Set([
+  'have', 'suffices', 'obtain', 'let', 'set', 'wlog', 'calc', 'case',
+]);
+
+const KERNEL_NOISE = new Set([
+  'Eq', 'Eq.refl', 'Eq.symm', 'Eq.trans', 'Eq.mp', 'Eq.mpr', 'Eq.ndrec', 'Eq.rec', 'rfl',
+  'OfNat.ofNat', 'Not', 'True', 'True.intro', 'False', 'Or', 'And', 'Iff', 'Exists',
+  'Nat', 'Int', 'Prod', 'Prod.mk', 'Prod.fst', 'Prod.snd', 'PProd', 'MProd',
+  'HAdd.hAdd', 'HSub.hSub', 'HMul.hMul', 'HDiv.hDiv', 'HMod.hMod', 'HPow.hPow', 'Neg.neg',
+  'ite', 'dite', 'congr', 'congrArg', 'congrFun', "congrFun'", 'Decidable.byContradiction',
+  'id', 'Function.comp', 'sorryAx', 'propext', 'funext', 'Classical.choice',
+  'ite_eq_left_of_eq_true', 'ite_eq_right_of_eq_false', 'of_eq_true', 'eq_true', 'eq_false',
+]);
+
+function isKernelNoise(name: string): boolean {
+  if (KERNEL_NOISE.has(name)) return true;
+  const last = name.split('.').pop() ?? name;
+  if (/^(inst[A-Z]|_@|match_|rec\b|casesOn\b|recOn\b|brecOn\b|below\b|noConfusion)/.test(last)) return true;
+  return false;
+}
+
+/**
+ * A landmark's area comes from the atlas entry when there is one, else from
+ * being declared in the user's own file. Never guess an area from a constant's
+ * name (sum_5 §3): an unmapped constant is Core, so its colour stays honest.
+ */
+export function inferArea(name: string, local: Set<string>, entryArea?: string): string {
+  if (entryArea) return entryArea;
+  if (local.has(name)) return 'Local';
+  for (const decl of local) {
+    const ns = decl.slice(0, decl.lastIndexOf('.'));
+    if (ns && name.startsWith(`${ns}.`)) return 'Local';
+  }
+  return 'Core';
+}
+
+export function isTypeBoundaryTactic(tactic: string): boolean {
+  const h = tacticHead(tactic);
+  return TYPE_BOUNDARY.has(h) || /^(have|suffices|obtain|case)\b/.test(tactic.trim());
+}
 
 export function tacticHead(tactic: string): string {
   const t = tactic.trim().replace(/^·\s*/, '');
@@ -92,15 +128,31 @@ export function rawMoves(decl: DeclTrace): RawMove[] {
     }
     return out;
   };
+  const absorbed = new Set<number>();
   const moves: RawMove[] = [];
   for (const s of steps) {
+    if (absorbed.has(s.idx)) continue;
     if (s.before.length === 0) continue;
+    const rawTac = s.tactic.trim();
+    if (s.kind === 'Lean.cdotTk' || s.kind === 'by' || rawTac === '·' || rawTac === 'by') continue;
     const g = s.before[0];
     const desc = descendants(s.idx);
     // A container whose descendants already handle its main goal (e.g. `· tac`) is transparent.
     if (desc.some((d) => steps[d].before[0] === g)) continue;
     const producedInside = new Set<string>();
     for (const d of desc) for (const a of steps[d].after) producedInside.add(a);
+    const consumedInside = new Set<string>();
+    for (const d of desc) if (steps[d].before[0]) consumedInside.add(steps[d].before[0]);
+    const hasSorryInside = desc.some((d) => isSorryStep(steps[d]));
+    const hasOpenInside = [...producedInside].some((a) => !consumedInside.has(a));
+    // If a tactic block (e.g. `have h : P := by omega`) completely closes its auxiliary subgoal
+    // inline without `sorry`, treat the block as a single self-contained move `g -> newAfter`.
+    if (desc.length > 0 && !hasSorryInside && !hasOpenInside && s.after.length > 0) {
+      for (const d of desc) absorbed.add(d);
+      const newAfter = s.after.filter((a) => !s.before.includes(a));
+      moves.push({ id: `m${s.idx}`, steps: [s.idx], from: g, to: [...new Set(newAfter)], sorry: isSorryStep(s) });
+      continue;
+    }
     const spawned: string[] = [];
     for (const d of desc) {
       const b = steps[d].before[0];
@@ -118,7 +170,7 @@ export function buildProofMap(decl: DeclTrace, opts: BuildOptions): ProofMap {
   const stepsByIdx = new Map(decl.steps.map((s) => [s.idx, s]));
   const pinned = opts.pinned ?? new Set<string>();
   const chunked = opts.chunked ?? new Set<string>();
-  const maxL = opts.maxLandmarksPerMove ?? (opts.level === 1 ? 2 : 3);
+  const maxL = opts.maxLandmarksPerMove ?? 3;
   const table = opts.importance?.table ?? {};
   const areas = opts.importance?.areas ?? [];
   const local = opts.localNames ?? new Set<string>();
@@ -139,34 +191,36 @@ export function buildProofMap(decl: DeclTrace, opts: BuildOptions): ProofMap {
     let w = 0;
     for (const i of m.steps) {
       const s = stepsByIdx.get(i)!;
-      for (const c of [...s.constants, ...s.used]) w = Math.max(w, uses(c));
+      for (const c of s.constants) w = Math.max(w, uses(c));
+      for (const c of s.used) if (!isKernelNoise(c)) w = Math.max(w, uses(c));
     }
     return w;
   };
   const heads = (m: RawMove) => m.steps.map((i) => tacticHead(stepsByIdx.get(i)!.tactic));
-  const isMinor = (m: RawMove) =>
-    heads(m).every((h) => PLUMBING.has(h)) && moveWeight(m) < opts.landmarkThreshold;
+  const hasTypeBoundary = (m: RawMove) =>
+    m.steps.some((i) => isTypeBoundaryTactic(stepsByIdx.get(i)!.tactic));
   const isMilestone = (m: RawMove) =>
+    hasTypeBoundary(m) ||
     heads(m).some((h) => MILESTONE.has(h) && h !== 'exact' && h !== 'apply') ||
     moveWeight(m) >= opts.landmarkThreshold * 10;
 
-  // ---- coarse-graining by contracting linear chains --------------------------------------
-  if (opts.level > 1 || chunked.size > 0) {
+  // ---- explicit chunking only: fold linear chains through goals the user marked "I grok this" --
+  if (chunked.size > 0) {
     let changed = true;
     while (changed) {
       changed = false;
       for (const n of goals.keys()) {
-        if (n === root || frontier.has(n) || pinned.has(n)) continue;
+        const gObj = goals.get(n);
+        const canon = gObj ? canonicalGoalKey(gObj.target, gObj.pp) : '';
+        const isPinned = pinned.has(n) || (canon !== '' && pinned.has(canon));
+        const isChunked = chunked.has(n) || (canon !== '' && chunked.has(canon));
+        if (n === root || frontier.has(n) || isPinned || !isChunked) continue;
         const ins = moves.filter((m) => m.to.includes(n));
         const outs = moves.filter((m) => m.from === n);
         if (ins.length !== 1 || outs.length !== 1) continue;
         const [m1] = ins;
         const [m2] = outs;
         if (m1.to.length !== 1) continue;
-        let contract = chunked.has(n);
-        if (!contract && opts.level === 2) contract = isMinor(m1) || isMinor(m2);
-        if (!contract && opts.level === 3) contract = !isMilestone(m1) || isMinor(m2);
-        if (!contract) continue;
         const merged: RawMove = {
           id: `${m1.id}+${m2.id}`,
           steps: [...m1.steps, ...m2.steps].sort((a, b) => a - b),
@@ -185,7 +239,9 @@ export function buildProofMap(decl: DeclTrace, opts: BuildOptions): ProofMap {
   // ---- emit nodes & edges -----------------------------------------------------------------
   const nodes: MapNode[] = [];
   const edges: MapEdge[] = [];
+  const loopClosures = detectLoopClosures(decl.goals);
   const seenGoal = new Set<string>();
+  const rootTarget = root ? goals.get(root)?.target : undefined;
   const emitGoal = (id: string) => {
     if (seenGoal.has(id)) return;
     seenGoal.add(id);
@@ -195,14 +251,26 @@ export function buildProofMap(decl: DeclTrace, opts: BuildOptions): ProofMap {
     const isFrontier = frontier.has(id);
     const sorryStep = frontier.get(id);
     const ss = sorryStep !== undefined ? stepsByIdx.get(sorryStep) : undefined;
+    const canon = canonicalGoalKey(target, g?.pp);
+    const equiv = loopClosures.get(id);
+    let displayTarget = truncate(target, 56);
+    if (!isRoot && rootTarget && target === rootTarget && g?.pp) {
+      const hyps = parseHypotheses(g.pp);
+      const lastHyp = hyps[hyps.length - 1];
+      if (lastHyp) {
+        displayTarget = `${truncate(`${lastHyp.name} : ${lastHyp.type}`, 44)}\n⊢ ${truncate(target, 48)}`;
+      }
+    }
     nodes.push({
       id: `g:${id}`,
       kind: isRoot ? 'theorem' : isFrontier ? 'frontier' : 'goal',
-      label: isRoot ? `${decl.name.split('.').pop()}\n${truncate(target, 56)}` : truncate(target, 56),
+      label: isRoot ? `${decl.name.split('.').pop()}\n${truncate(target, 56)}` : displayTarget,
       detail: g?.pp ?? target,
       relation: relationOf(target),
       sorryStep,
       range: ss ? { startLine: ss.startLine, startCol: ss.startCol, endLine: ss.endLine, endCol: ss.endCol } : undefined,
+      canonicalKey: canon,
+      equivalentTo: equiv,
     });
   };
 
@@ -224,6 +292,7 @@ export function buildProofMap(decl: DeclTrace, opts: BuildOptions): ProofMap {
       detail: ss.map((s) => s.tactic).join('\n'),
       steps: m.steps,
       milestone: isMilestone(m),
+      typeBoundary: hasTypeBoundary(m),
       collapsed: ss.length,
       range: { startLine: first.startLine, startCol: first.startCol, endLine: last.endLine, endCol: last.endCol },
     });
@@ -241,10 +310,12 @@ export function buildProofMap(decl: DeclTrace, opts: BuildOptions): ProofMap {
     const cand = new Map<string, number>();
     for (const s of ss) {
       for (const c of s.constants) {
+        if (isKernelNoise(c)) continue;
         const u = uses(c);
-        if (u >= opts.landmarkThreshold || local.has(c) || !opts.importance) cand.set(c, Math.max(u, 1) + 1e6);
+        cand.set(c, Math.max(u, 1) + 1e6);
       }
       for (const c of s.used) {
+        if (isKernelNoise(c)) continue;
         const u = uses(c);
         if (u >= opts.landmarkThreshold) cand.set(c, Math.max(cand.get(c) ?? 0, u));
       }
@@ -255,11 +326,12 @@ export function buildProofMap(decl: DeclTrace, opts: BuildOptions): ProofMap {
       if (!landmarkSeen.has(name)) {
         landmarkSeen.add(name);
         const entry = table[name];
+        const entryArea = entry ? areas[entry[1]] : undefined;
         nodes.push({
           id: lid,
           kind: 'landmark',
           label: name,
-          area: entry ? areas[entry[1]] ?? 'Core' : local.has(name) ? 'Local' : 'Core',
+          area: inferArea(name, local, entryArea),
           uses: entry?.[0] ?? 0,
         });
       }
@@ -270,9 +342,25 @@ export function buildProofMap(decl: DeclTrace, opts: BuildOptions): ProofMap {
   if (root) emitGoal(root);
   if (hasKnown) nodes.push({ id: 'known', kind: 'known', label: 'grounded in the known' });
 
+  // Emit loop-closure equivalence edges between equivalent subgoals
+  const seenLoops = new Set<string>();
+  for (const [gId, equivs] of loopClosures.entries()) {
+    for (const otherId of equivs) {
+      const pairKey = [gId, otherId].sort().join('<->');
+      if (!seenLoops.has(pairKey)) {
+        seenLoops.add(pairKey);
+        edges.push({
+          id: `loop:${pairKey}`,
+          source: `g:${gId}`,
+          target: `g:${otherId}`,
+          kind: 'equiv',
+        });
+      }
+    }
+  }
+
   return {
     decl: decl.name,
-    level: opts.level,
     nodes,
     edges,
     stats: {
@@ -281,11 +369,12 @@ export function buildProofMap(decl: DeclTrace, opts: BuildOptions): ProofMap {
       frontier: frontier.size,
       landmarks: landmarkSeen.size,
       complete: frontier.size === 0,
+      loopClosures: seenLoops.size,
     },
   };
 }
 
-/** Goal ids interior to a (coarse) move: unpacking pins them so they reappear. */
+/** Goal ids and canonical keys interior to a (coarse) move: unpacking pins them so they reappear. */
 export function interiorGoals(decl: DeclTrace, stepIdxs: number[]): string[] {
   const set = new Set(stepIdxs);
   const out = new Set<string>();
@@ -293,9 +382,17 @@ export function interiorGoals(decl: DeclTrace, stepIdxs: number[]): string[] {
     if (!set.has(s.idx)) continue;
     for (const a of s.after) out.add(a);
   }
-  // keep only goals that are also consumed inside the block (strictly interior)
   const consumedInside = new Set(decl.steps.filter((s) => set.has(s.idx)).map((s) => s.before[0]));
-  return [...out].filter((g) => consumedInside.has(g));
+  const ids = [...out].filter((g) => consumedInside.has(g));
+  const keys: string[] = [...ids];
+  for (const id of ids) {
+    const g = decl.goals.find((x) => x.id === id);
+    if (g) {
+      const ck = canonicalGoalKey(g.target, g.pp);
+      if (ck) keys.push(ck);
+    }
+  }
+  return keys;
 }
 
 /** Pick the declaration containing a 1-based line. */
