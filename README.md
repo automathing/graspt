@@ -9,7 +9,7 @@ git clone <this-repo> && cd graspt
 npm ci
 npx graspt setup        # one long offline job: Lean → Mathlib cache → global atlas
 npx graspt demo-ready   # names any missing stage; never silently regenerates
-npm start               # → open http://127.0.0.1:4173/ in your browser
+npm start               # → open http://127.0.0.1:4174/ in your browser
 ```
 
 For a first look with no setup at all, `npm start` opens the pre-indexed demo instantly — 12 Lean proofs, already traced, with open frontiers waiting to be closed live.

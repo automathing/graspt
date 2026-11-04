@@ -44,11 +44,11 @@ async function main() {
     return;
   }
   if (args[0] === '--help' || args[0] === '-h') {
-    console.log('Usage:\n  graspt [folder] [--port N] [--no-open]   Start the website (default port 4173)\n  graspt setup                              Provision Lean → Mathlib cache → global Atlas (one long job)\n  graspt doctor                             Print setup status as JSON\n  graspt demo-ready                         Check offline demo readiness (exit 1 if a stage is missing)\n  graspt <https://…git-url>                 Clone into /tmp/graspt-clones and open it');
+    console.log('Usage:\n  graspt [folder] [--port N] [--no-open]   Start the website (default port 4174)\n  graspt setup                              Provision Lean → Mathlib cache → global Atlas (one long job)\n  graspt doctor                             Print setup status as JSON\n  graspt demo-ready                         Check offline demo readiness (exit 1 if a stage is missing)\n  graspt <https://…git-url>                 Clone into /tmp/graspt-clones and open it');
     return;
   }
   const portFlag = args.indexOf('--port');
-  const port = portFlag >= 0 ? Number(args[portFlag + 1]) : Number(process.env.GRASPT_PORT ?? 4173);
+  const port = portFlag >= 0 ? Number(args[portFlag + 1]) : Number(process.env.GRASPT_PORT ?? 4174);
   const noOpen = args.includes('--no-open');
   const folder = args.find((a, i) => !a.startsWith('--') && (portFlag < 0 || i !== portFlag + 1));
 

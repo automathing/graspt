@@ -10,6 +10,7 @@ import { setupStatus, installLean, fetchMathlib, generateAtlas, demoReady, defau
 import { cleanTactic, findSorryStep, judgeApplication, replaceRange, sorryCount } from './splice';
 import { traceClient } from './trace-client';
 import { getScratchJob, startScratchGeneration } from './generate';
+import { createUploadWorkspace, type UploadFile } from './workspace';
 import { cloneAndIngest } from './ingest';
 import { ingestFolder, getJob, listJobs } from './ingest';
 
@@ -49,12 +50,12 @@ export function createServer(opts: ServerOptions) {
     });
     res.end(data);
   };
-  const readBody = (req: http.IncomingMessage) => new Promise<string>((resolve, reject) => {
+  const readBody = (req: http.IncomingMessage, limit = 1_000_000) => new Promise<string>((resolve, reject) => {
     let d = '';
     let settled = false;
     req.on('data', (c) => {
       d += c;
-      if (d.length > 1_000_000 && !settled) { settled = true; reject(new Error('request body too large')); req.destroy(); }
+      if (d.length > limit && !settled) { settled = true; reject(new Error('request body too large')); req.destroy(); }
     });
     req.on('end', () => { if (!settled) { settled = true; resolve(d); } });
     req.on('error', (e) => { if (!settled) { settled = true; reject(e); } });
@@ -110,6 +111,18 @@ export function createServer(opts: ServerOptions) {
       if (req.method === 'GET' && seg.length === 3 && seg[1] === 'scratch-jobs') {
         const job = getScratchJob(seg[2]);
         send(res, job ? 200 : 404, job ?? { error: 'unknown scratch job' });
+        return;
+      }
+      // POST /api/repos/upload {name, files:[{path,content}]} — browser folder
+      // picker / drag-and-drop: files are materialised into a server-owned
+      // working copy, then ingested like a folder. The user's real folder
+      // is only ever read by their own browser.
+      if (req.method === 'POST' && seg.length === 3 && seg[1] === 'repos' && seg[2] === 'upload') {
+        const body = JSON.parse((await readBody(req, 12_000_000)) || '{}') as { name?: string; files?: UploadFile[] };
+        try {
+          const ws = createUploadWorkspace(storeDir, body.name ?? 'upload', body.files ?? []);
+          send(res, 202, await ingestFolder(ws, storeDir, (r) => repos.set(r.id, r)));
+        } catch (e) { send(res, 400, { error: e instanceof Error ? e.message : String(e) }); }
         return;
       }
       // POST /api/repos/clone {url} — clone into /tmp/graspt-clones, then ingest (before the :id guard)

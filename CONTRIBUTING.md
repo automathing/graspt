@@ -6,7 +6,7 @@
 npm ci
 npm run typecheck
 npm test
-npm start -- ./lean   # Open http://127.0.0.1:4173/ in a browser
+npm start -- ./lean   # Open http://127.0.0.1:4174/ in a browser
 ```
 
 Node ≥ 20. The Lean tooling in `lean/` needs `elan` on PATH (`~/.elan/bin`); the website and tests do not.

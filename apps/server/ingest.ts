@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import type { TraceResult } from '../../packages/core/types';
-import { repoFromTraces, type Repo } from './store';
+import { packageRoot, repoFromTraces, type Repo } from './store';
 
 export interface Job {
   id: string;
@@ -84,12 +84,67 @@ function leanFiles(root: string, cap = 40): string[] {
   return out.sort();
 }
 
-function runTrace(lakeRoot: string, relFile: string, timeoutMs = 180000): Promise<TraceResult> {
+/** Graspt's own tracer binary (built from the bundled lean/ project). */
+export function tracerBinaryPath(): string {
+  return path.join(packageRoot(), 'lean', '.lake', 'build', 'bin', 'graspt-trace');
+}
+
+/**
+ * Trace a file of an *external* project. `lake exe graspt-trace` cannot
+ * work there — Lake only knows executables declared in the target
+ * project's own lakefile. Instead we run Graspt's tracer binary under the
+ * target project's `lake env`, which puts that project's imports and
+ * search path in place for elaboration.
+ */
+export function traceInvocation(bin: string, relFile: string): { cmd: string; args: string[] } {
+  return { cmd: 'lake', args: ['env', bin, relFile] };
+}
+
+let tracerBuild: Promise<void> | undefined;
+
+/** Build the tracer binary once if setup has not already produced it. */
+function ensureTracerBinary(): Promise<void> {
+  if (fs.existsSync(tracerBinaryPath())) return Promise.resolve();
+  if (!tracerBuild) {
+    const project = path.join(packageRoot(), 'lean');
+    tracerBuild = new Promise<void>((resolve, reject) => {
+      const env = { ...process.env, PATH: `${process.env.HOME}/.elan/bin:${process.env.PATH ?? ''}` };
+      execFile('lake', ['build', 'graspt-trace'], { cwd: project, env, timeout: 600_000, maxBuffer: 16 * 1024 * 1024 }, (err) => {
+        tracerBuild = undefined;
+        if (err) reject(new Error(`graspt-trace binary is not built and building it failed (${err.message}). Run: graspt setup`));
+        else if (!fs.existsSync(tracerBinaryPath())) reject(new Error('graspt-trace binary still missing after build. Run: graspt setup'));
+        else resolve();
+      });
+    });
+  }
+  return tracerBuild;
+}
+
+/**
+ * Parse tracer output. `lake env` may print build progress to stdout
+ * before the tracer's single JSON line, so accept the last JSON-looking
+ * line (or a JSON object starting at the first `{`) rather than demanding
+ * the whole stream be JSON.
+ */
+export function parseTraceOutput(stdout: string): TraceResult {
+  try { return JSON.parse(stdout) as TraceResult; } catch { /* fall through */ }
+  const lines = stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try { return JSON.parse(lines[i]) as TraceResult; } catch { /* keep looking */ }
+  }
+  const start = stdout.indexOf('{');
+  if (start >= 0) return JSON.parse(stdout.slice(start)) as TraceResult;
+  throw new Error('no JSON in tracer output');
+}
+
+async function runTrace(lakeRoot: string, relFile: string, timeoutMs = 180000): Promise<TraceResult> {
+  await ensureTracerBinary();
+  const { cmd, args } = traceInvocation(tracerBinaryPath(), relFile);
   return new Promise((resolve, reject) => {
     const env = { ...process.env, PATH: `${process.env.HOME}/.elan/bin:${process.env.PATH ?? ''}` };
-    execFile('lake', ['exe', 'graspt-trace', relFile], { cwd: lakeRoot, env, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 }, (err, stdout) => {
-      if (err) return reject(new Error(`graspt-trace failed for ${relFile}: ${err.message}`));
-      try { resolve(JSON.parse(stdout) as TraceResult); } catch { reject(new Error(`graspt-trace returned non-JSON for ${relFile}`)); }
+    execFile(cmd, args, { cwd: lakeRoot, env, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) return reject(new Error(`graspt-trace failed for ${relFile}: ${(stderr || err.message).slice(-400)}`));
+      try { resolve(parseTraceOutput(stdout)); } catch { reject(new Error(`graspt-trace returned non-JSON for ${relFile}: ${stdout.slice(0, 200)}`)); }
     });
   });
 }
@@ -116,15 +171,46 @@ export async function ingestFolder(folder: string, storeDir: string, register: (
       }
       const files = leanFiles(root);
       if (!files.length) throw new Error('no .lean files found in folder');
-      // lake project root = nearest ancestor (incl. self) with lakefile
-      let lakeRoot = root;
-      while (!fs.existsSync(path.join(lakeRoot, 'lakefile.lean')) && !fs.existsSync(path.join(lakeRoot, 'lakefile.toml'))) {
-        const parent = path.dirname(lakeRoot);
-        if (parent === lakeRoot) break;
-        lakeRoot = parent;
+      // Lake project root: nearest ancestor of a Lean file (up to and
+      // including the opened root, then above it) that carries a lakefile.
+      // Browser uploads keep their top-level folder, so the lakefile may
+      // sit one level below the workspace root.
+      const hasLakefile = (dir: string) => fs.existsSync(path.join(dir, 'lakefile.lean')) || fs.existsSync(path.join(dir, 'lakefile.toml'));
+      let lakeRoot: string | undefined;
+      outer: for (const f of files) {
+        let dir = path.dirname(f);
+        for (;;) {
+          if (hasLakefile(dir)) { lakeRoot = dir; break outer; }
+          if (dir === root) break;
+          const parent = path.dirname(dir);
+          if (parent === dir) break;
+          dir = parent;
+        }
       }
-      if (!fs.existsSync(path.join(lakeRoot, 'lakefile.lean')) && !fs.existsSync(path.join(lakeRoot, 'lakefile.toml'))) {
+      if (!lakeRoot) {
+        let dir = root;
+        while (!hasLakefile(dir)) {
+          const parent = path.dirname(dir);
+          if (parent === dir) break;
+          dir = parent;
+        }
+        if (hasLakefile(dir)) lakeRoot = dir;
+      }
+      if (!lakeRoot) {
         throw new Error(`found ${files.length} .lean files but no lakefile — cannot trace. Precompute .graspt/trace.json with graspt-trace instead.`);
+      }
+      // A browser-uploaded workspace arrives without `.lake` (build
+      // artifacts are never uploaded), so its dependencies have no compiled
+      // oleans to elaborate against. Fetch the dependency cache first when
+      // the project has none; projects whose cache cannot be fetched fall
+      // through to tracing, which surfaces the real error.
+      if (!fs.existsSync(path.join(lakeRoot, '.lake', 'packages'))) {
+        job.state = 'tracing';
+        job.detail = `fetching dependency cache for ${path.basename(lakeRoot)} (lake exe cache get, large download)…`;
+        await new Promise<void>((resolve) => {
+          const env = { ...process.env, PATH: `${process.env.HOME}/.elan/bin:${process.env.PATH ?? ''}` };
+          execFile('lake', ['exe', 'cache', 'get'], { cwd: lakeRoot, env, timeout: 900_000, maxBuffer: 16 * 1024 * 1024 }, () => resolve());
+        });
       }
       job.state = 'tracing';
       const traces: TraceResult[] = [];

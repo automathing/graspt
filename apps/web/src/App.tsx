@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, post, type AtlasData, type MapNode, type NeighbourhoodData, type ProofMapData, type RepoInfo } from '@/lib/api';
 import { ProofMap, areaColor } from '@/components/ProofMap';
 import { ChatRail } from '@/components/ChatRail';
@@ -76,10 +76,10 @@ export default function App() {
     }
   }
 
-  async function openFolder(path: string) {
-    if (!path.trim()) return;
-    setJobStatus('ingesting…');
-    const job = await api<any>('/api/repos/open', post({ path: path.trim() }));
+  async function uploadFolder(name: string, files: { path: string; content: string }[]) {
+    setJobStatus(`uploading ${files.length} file(s) from ${name}…`);
+    const job = await api<any>('/api/repos/upload', post({ name, files }));
+    if (!job || job.error) { setJobStatus(`upload failed: ${job?.error ?? 'empty response'}`); return; }
     void pollJob(job.id);
   }
 
@@ -202,7 +202,7 @@ export default function App() {
               </div>
             </div>
 
-            <EntryRow n={2} title="Local Lean folder" desc="Open a Lean project on this machine. It is read, never written, until you fire a commit." placeholder="/path/to/lean-project" button="Open folder" onGo={openFolder} />
+            <FolderEntry onUpload={uploadFolder} />
             <EntryRow n={3} title="Remote repository" desc="Clone a git repository into server scratch space and navigate its proofs." placeholder="https://github.com/owner/lean-repo.git" button="Clone repository" onGo={cloneRepo} />
 
             <div className="py-6">
@@ -343,6 +343,84 @@ function EntryRow({ n, title, desc, placeholder, button, onGo }: {
       <div className="mt-3 flex flex-col gap-2 sm:flex-row">
         <Input placeholder={placeholder} value={v} onChange={(e) => setV(e.target.value)} aria-label={title} className="bg-white" />
         <Button variant="secondary" className="shrink-0" onClick={() => onGo(v)}>{button}</Button>
+      </div>
+    </div>
+  );
+}
+
+const UPLOADABLE = (name: string) => name.endsWith('.lean') || name === 'lakefile.toml' || name === 'lakefile.lean' || name === 'lean-toolchain';
+const SKIP = new Set(['.git', '.lake', 'node_modules', 'dist']);
+
+async function readFiles(picked: { file: File; path: string }[]): Promise<{ path: string; content: string }[]> {
+  const out: { path: string; content: string }[] = [];
+  for (const { file, path } of picked) {
+    if (!UPLOADABLE(path.split('/').pop() ?? '')) continue;
+    out.push({ path, content: await file.text() });
+    if (out.length >= 300) break;
+  }
+  return out;
+}
+
+async function traverseEntry(entry: FileSystemEntry, prefix: string, acc: { file: File; path: string }[]): Promise<void> {
+  if (SKIP.has(entry.name)) return;
+  if (entry.isFile) {
+    const file = await new Promise<File>((res, rej) => (entry as FileSystemFileEntry).file(res, rej));
+    acc.push({ file, path: prefix + entry.name });
+  } else if (entry.isDirectory) {
+    const reader = (entry as FileSystemDirectoryEntry).createReader();
+    const children = await new Promise<FileSystemEntry[]>((res, rej) => reader.readEntries(res, rej));
+    for (const c of children) await traverseEntry(c, `${prefix}${entry.name}/`, acc);
+  }
+}
+
+function FolderEntry({ onUpload }: { onUpload: (name: string, files: { path: string; content: string }[]) => void }) {
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // webkitdirectory is not a standard React prop; set it on the DOM node.
+    if (inputRef.current) {
+      inputRef.current.setAttribute('webkitdirectory', '');
+      inputRef.current.setAttribute('directory', '');
+    }
+  }, []);
+
+  async function fromPicker(files: FileList | null) {
+    if (!files?.length) return;
+    const picked = [...files].map((file) => ({ file, path: (file as any).webkitRelativePath || file.name }));
+    const name = picked[0]?.path.split('/')[0] || 'upload';
+    onUpload(name, await readFiles(picked));
+  }
+
+  async function fromDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragging(false);
+    const acc: { file: File; path: string }[] = [];
+    const items = [...e.dataTransfer.items].filter((i) => i.kind === 'file');
+    for (const item of items) {
+      const entry = item.webkitGetAsEntry?.();
+      if (entry) await traverseEntry(entry, '', acc);
+      else { const f = item.getAsFile(); if (f) acc.push({ file: f, path: f.name }); }
+    }
+    if (!acc.length) return;
+    const name = acc[0].path.split('/')[0] || 'upload';
+    onUpload(name, await readFiles(acc));
+  }
+
+  return (
+    <div className="py-6">
+      <EntryHeading n={2} title="Local Lean folder" desc="Your browser reads the folder and uploads its Lean sources to a server working copy. The original folder is never written." />
+      <div
+        role="button" tabIndex={0} aria-label="Drop a Lean folder here, or click to choose one"
+        onClick={() => inputRef.current?.click()}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inputRef.current?.click(); } }}
+        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={fromDrop}
+        className={`mt-3 cursor-pointer rounded-lg border-2 border-dashed px-4 py-7 text-center transition-colors ${dragging ? 'border-teal-700 bg-teal-50' : 'border-stone-300 bg-white/60 hover:border-teal-700'}`}>
+        <p className="font-serif text-base font-bold text-stone-800">Drag &amp; drop a Lean folder here</p>
+        <p className="mt-1 text-sm text-stone-500">or click to choose a folder — only <code className="font-mono text-xs">.lean</code> sources and Lake files are uploaded (≤300 files, ≤10 MB)</p>
+        <input ref={inputRef} type="file" multiple hidden onChange={(e) => { void fromPicker(e.target.files); e.target.value = ''; }} />
       </div>
     </div>
   );
