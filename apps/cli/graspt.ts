@@ -12,7 +12,7 @@ async function waitJob(job: SetupJob) {
 /**
  * `graspt setup` — provision Lean, the Mathlib cache, and the global Atlas
  * in staged, idempotent steps. Run it as ONE long job: the Atlas stage
- * imports all of Mathlib and can exceed 25 minutes on 4 cores; an
+ * imports all of Mathlib and can take a long time; an
  * interrupted stage restarts that stage. Explicit, never silent.
  */
 async function setup() {

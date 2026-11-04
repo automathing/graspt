@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Avenir Next", Avenir, "Segoe UI", system-ui, sans-serif;
+  --font-serif: Georgia, "Times New Roman", serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --color-forest: #14332b;
+  --color-forest-deep: #0c211b;
+  --color-moss: #1d4a3d;
+  --color-paper: #e9ede8;
+  --color-parchment: #f4f1e6;
+  --color-brass: #c28a2d;
+}
+
+html, body, #root { height: 100%; }
+body {
+  background:
+    radial-gradient(1100px 500px at 85% -10%, rgba(29, 74, 61, .10), transparent 60%),
+    var(--color-paper);
+}
+
+/* Contour-line texture for dark surfaces (start-screen intro, ego centre). */
+.contours {
+  background-image:
+    radial-gradient(ellipse 420px 190px at 78% 18%, transparent 62%, rgba(242, 198, 109, .14) 63%, transparent 64%),
+    radial-gradient(ellipse 620px 300px at 78% 18%, transparent 62%, rgba(242, 198, 109, .10) 63%, transparent 64%),
+    radial-gradient(ellipse 860px 430px at 78% 18%, transparent 62%, rgba(242, 198, 109, .07) 63%, transparent 64%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}

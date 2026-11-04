@@ -9,6 +9,7 @@ import { metaStatus, setMetaApiKey, setModel, metaModel, extractApiKey, extractM
 import { setupStatus, installLean, fetchMathlib, generateAtlas, demoReady, defaultStoreDir, getSetupJob } from './setup';
 import { cleanTactic, findSorryStep, judgeApplication, replaceRange, sorryCount } from './splice';
 import { traceClient } from './trace-client';
+import { getScratchJob, startScratchGeneration } from './generate';
 import { cloneAndIngest } from './ingest';
 import { ingestFolder, getJob, listJobs } from './ingest';
 
@@ -64,9 +65,9 @@ export function createServer(opts: ServerOptions) {
       const url = new URL(req.url ?? '/', 'http://localhost');
       const seg = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
 
-      // ---- static web ----
+      // ---- static web (Vite build output) ----
       if (req.method === 'GET' && (url.pathname === '/' || !url.pathname.startsWith('/api/'))) {
-        const webRoot = path.resolve(packageRoot(), 'apps', 'web');
+        const webRoot = path.resolve(packageRoot(), 'apps', 'web', 'dist');
         const rel = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
         let decoded = rel;
         try { decoded = decodeURIComponent(rel); } catch { send(res, 400, 'bad path', 'text/plain'); return; }
@@ -91,13 +92,24 @@ export function createServer(opts: ServerOptions) {
         const job = await ingestFolder(body.path, storeDir, (r) => repos.set(r.id, r));
         send(res, 202, job); return;
       }
-      // POST /api/repos/scratch {prompt?} — a blank session repo: no declarations yet;
-      // the human's intent lives in chat until the agent drafts Lean for it.
+      // POST /api/repos/scratch {prompt} — start scratch generation: the agent
+      // drafts Lean from intent, the tracer elaborates it (with repair), and
+      // only a Lean-verified trace becomes a repo with a map. Poll the job.
       if (req.method === 'POST' && seg.length === 3 && seg[1] === 'repos' && seg[2] === 'scratch') {
         const body = JSON.parse((await readBody(req)) || '{}') as { prompt?: string };
-        const repo = repoFromTraces(`scratch-${Date.now()}`, body.prompt?.trim() ? `Scratch: ${body.prompt.trim().slice(0, 60)}` : 'Scratch session', storeDir, [], 'scratch');
-        repos.set(repo.id, repo);
-        send(res, 201, { id: repo.id, name: repo.name, source: repo.source, decls: 0 });
+        if (!body.prompt?.trim()) { send(res, 400, { error: 'prompt required — say what to prove' }); return; }
+        const job = startScratchGeneration(body.prompt, (f, c) => traceClient().trace(f, c), (done, trace) => {
+          const repo = repoFromTraces(done.id, `Scratch: ${done.prompt.slice(0, 60)}`, storeDir, [trace], 'scratch');
+          repos.set(repo.id, repo);
+          done.repoId = repo.id;
+          if (done.code) sourceOverrides.set(`${repo.id}:${trace.file}`, done.code);
+        });
+        send(res, 202, job);
+        return;
+      }
+      if (req.method === 'GET' && seg.length === 3 && seg[1] === 'scratch-jobs') {
+        const job = getScratchJob(seg[2]);
+        send(res, job ? 200 : 404, job ?? { error: 'unknown scratch job' });
         return;
       }
       // POST /api/repos/clone {url} — clone into /tmp/graspt-clones, then ingest (before the :id guard)

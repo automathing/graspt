@@ -130,7 +130,7 @@ export async function ingestFolder(folder: string, storeDir: string, register: (
       const traces: TraceResult[] = [];
       for (const f of files.slice(0, 3)) {
         const rel = path.relative(lakeRoot, f);
-        job.detail = `tracing ${rel} (Lean elaboration, may take minutes on 4 cores)`;
+        job.detail = `tracing ${rel} (Lean elaboration, may take minutes)`;
         traces.push(await runTrace(lakeRoot, rel));
       }
       fs.mkdirSync(storeDir, { recursive: true });

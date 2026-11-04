@@ -1,60 +1,137 @@
 # Graspt
 
-**Allocentric topological proof navigation for Lean 4 + Mathlib — an npm CLI that launches a localhost website.**
+**Stand on the map. Direct the agent. Lean tells the truth.**
 
-> *"A geometric and topological metaphor for the space of what humanity already knows, and what can be reached just by combining existing ideas."*
-
-Graspt is for people with mathematical intuition who are blocked by transcoding between ideas and Lean's symbolic language. Humans navigate and judge; the agent proposes from the same map; Lean verifies. The current surface is **read-only exploration**: contribution appears only as Lean-verified ghost previews, and the server has no code path that writes to your repo.
-
-## Run it
-
-The supported reproduction path is a **git clone** (the npm tarball excludes `lean/`, so it is demo-grade only — the fixtures open, but it cannot rebuild the atlas or tracer):
+Graspt turns Lean 4 theorem proving from writing symbolic code into navigating proved mathematics. You explore a stable map of goals and landmarks, stand on a place, and direct an AI agent in plain language. The agent drafts and edits Lean. The Lean kernel verifies every move. Nothing unverified is ever presented as proved.
 
 ```bash
 git clone <this-repo> && cd graspt
 npm ci
-npx graspt setup             # one long job: Lean → Mathlib cache → global Atlas
-npx graspt demo-ready        # offline readiness check (exit 1 names any missing stage)
-npm start -- ./lean          # or: npx graspt ./lean, or npx graspt https://github.com/owner/repo.git
-# → Open this URL in your browser: http://127.0.0.1:4173/
+npx graspt setup        # one long offline job: Lean → Mathlib cache → global atlas
+npx graspt demo-ready   # names any missing stage; never silently regenerates
+npm start               # → open http://127.0.0.1:4173/ in your browser
 ```
 
-Setup is explicit and staged (Lean + Mathlib are gigabytes, so nothing downloads silently at install time). Run `graspt setup` as **one long job without a short shell timeout**: the Atlas stage imports all of Mathlib and can exceed 25 minutes on 4 cores, and an interrupted stage restarts that stage. Completed stages skip themselves — the atlas is fingerprinted (SHA-256 over toolchain + Mathlib revision + the atlas generator's source and parameters) and validated by parsing, so a stale or corrupt cache is regenerated, never trusted. `graspt doctor` prints the same status as JSON. State lives in a persistent store (`GRASPT_STORE`, default `~/.graspt/store`), never `/tmp` by default; in a container, persist `~/.graspt` (API key + store) as a volume or setup vanishes with the container, and start with `--no-open` plus port forwarding. A sandbox that only needs to verify the product can skip setup entirely: typecheck + tests + the fixture demo exercise it with no Lean, no downloads, and no API key.
+For a first look with no setup at all, `npm start` opens the pre-indexed demo instantly — 12 Lean proofs, already traced, with open frontiers waiting to be closed live.
 
-Setup stages: the elan Lean toolchain `leanprover/lean4:v4.36.0-rc2`, the Mathlib cache of the bundled `lean/` project, then the global Mathlib atlas (`graspt-atlas`) — areas, landmarks, and the importance table the proof maps rank by. Chat needs no installation: it calls the Meta AI API via the Vercel AI SDK (`ai` + `@ai-sdk/openai` pointed at `https://api.meta.ai/v1`, Responses API, model `muse-wonder-1.0` by default, selectable next to the chatbox). Paste your Meta API key (`MODEL_API_KEY`) next to the chatbox; it is stored on the server only (`~/.graspt/`, mode `0600`) and never sent back to the browser.
+---
 
-Opening sources: a local folder, or a git URL — remotes are cloned into `/tmp/graspt-clones/` (server scratch space) and ingested from there. Note the browser itself cannot see `/tmp` (or any filesystem); the Node server running on the same machine reads folders/clones and serves only the map API, which is why `/tmp/...` paths work in the UI.
+## The problem
 
-Pre-indexed demo traces ship in `fixtures/demo/`, so the atlas opens instantly with no Lean run. To open another folder, paste its path in the header bar (ingestion runs as a visible job; a lake project is traced with `graspt-trace`, ≤3 files), or precompute `<folder>/.graspt/trace.json`.
+AI agents can now write Lean. Almost nobody can steer them.
 
-## What you see
+The barrier is not mathematical intelligence. It is **transcoding**: turning an idea in your head — *these two lemmas should combine here, this induction should split there* — into `rcases`, `refine`, and Mathlib incantations, and turning Lean's symbolic output back into an idea. That transcoding cost locks out the largest pool of mathematical talent: people with intuition and judgement who never paid the years-long syntax apprenticeship.
 
-1. **Atlas first** — the repo territory: areas, landmarks (coloured by Mathlib area only), and declarations.
-2. **Proof map** — click a declaration: goals, moves (tactics as `Goal → List Goal`), landmarks, frontiers, `≡` loop closures. Places are keyed by canonical `Γ ⊢ T`, never `MVarId`, so re-traces don't move nodes.
-3. **Egocentric panel** — click any goal: its full context plus up to 10 nearest neighbours. Click through them to walk the proof mouse-only.
-4. **Chat + navigator walk** — answers cite graph node IDs and are validated server-side (bad citations are marked unverified); the walk replays tactics Lean actually elaborated. Agent output can never mutate the graph or your files.
-5. **Try a suggestion (demo slice)** — stand on an open frontier (`sorry`), ask the agent, and press **Try this — Lean checks it** on a tactic candidate. The server splices it into a session working copy and re-elaborates with a persistent tracer (~0.1s warm); only if Lean accepts it (no errors, frontier closed) is the map redrawn in place. A rejection explains the diagnostic and leaves the map unchanged. Nothing is written to the opened repo on disk.
+Existing interfaces make it worse. An editor shows you one goal at a time through a keyhole. You cannot see the shape of a proof, where you are in it, what is near you, or what a step is *for*. You are navigating a territory through a periscope, typing coordinates by hand.
 
-## Layout
+Graspt's bet: **in the age of AI agents, the human's job in formal mathematics changes from encoding proofs to navigating and judging them.** Interfaces should be built for that job.
 
-| Path | What |
+## The philosophy
+
+Five commitments shape every part of this codebase. They are stated here as concepts because they *are* the product — the code is their crystallised form.
+
+### 1. Mathematics is a territory, and places stay put
+
+A proof is rendered as a topological map: goals are **places**, tactics are **moves** between places, named theorems are **landmarks**, and an unsolved goal is an open **frontier**. Two views of the same map are always present:
+
+- the **allocentric map** — the whole territory seen from outside, world-fixed;
+- the **egocentric view** — where you are standing: your current goal `Γ ⊢ T` in full, the trail that brought you here, and your nearest neighbours.
+
+A map is only useful if places stay put. Every goal is therefore identified by a **canonical key built from its statement and context (`Γ ⊢ T`)** — never by Lean's transient internal IDs, which change on every elaboration. Re-trace a file and nothing moves. Clicking a neighbour walks you through the proof; your cursor, the map highlight, and the agent's context are always the same place.
+
+### 2. Three jobs, three actors
+
+- **The human** does the part humans compress well: pattern recognition over the map's shape. Choosing which frontier to attack, which landmarks to combine, which leap to trust.
+- **The AI agent** does the rote symbolic labour: traversing the proof graph computationally, drafting tactic code, translating between grains of detail, repairing what Lean rejects.
+- **Lean** disposes. It is the only voice allowed to say *true*. The agent proposes; the kernel decides.
+
+This is a shared-autonomy loop, stated plainly: the human emits high-level intent, the agent handles low-level execution, and verified feedback closes the loop. The claim is falsifiable, and that is its strength — an amateur reaching a first verified proof faster through this loop than through raw Lean is a timed experiment, not a slogan.
+
+### 3. Never predict provability — elaborate
+
+Whether a tactic closes a goal is, in practice, computationally irreducible: there is no cheap static preview of unification, typeclass search, or definitional equality. Any interface that renders model confidence as reachability is lying.
+
+So Graspt never guesses. A move is only drawn as real once Lean has produced it. A candidate tactic is drawn as a *suggestion* until Lean checks it — in a session working copy, off to the side, at ~0.1s per check through a persistent tracer. Accepted branches extend the map; rejected ones explain their diagnostics and leave the map untouched. Irreducibility is answered by execution, not by confidence scores.
+
+### 4. One shared map for human and agent
+
+The agent does not receive a prompt scraped from a text buffer. It receives the same place you see: the current goal, the branch-path trail, the neighbouring goals and landmarks, in the same frame of reference. Its answers must cite graph nodes that actually exist — citations are validated server-side, and fabricated ones are flagged as unverified. When you click, you are *pointing*, and the agent's world moves with your finger.
+
+### 5. Grain is a steering wheel, not a setting
+
+An expert's obvious single step is a learner's ten-step chasm. So the map adjusts fidelity dynamically: landmarks and non-trivial branching steps are surfaced, routine plumbing is collapsed into edges, and any leap can be unpacked when it looks too big. The agent's most valuable job is translating between grains on demand — so the human always works at the resolution their intuition can steer.
+
+## The demo loop (90 seconds)
+
+1. **Open the demo map.** Twelve pre-indexed Lean proofs — topology, algebra, number theory, induction, set theory — with 7 open frontiers.
+2. **Click a frontier**, e.g. `two_dvd_mul_succ`: *2 divides n·(n+1), for every n* — stated, not yet proved.
+3. **Ask the agent.** It answers in three parts: *Where you are* (in plain words), *What combines here* (the nearby landmarks and why), *My suggestion* (a tactic, marked unverified).
+4. **Press “Try this — Lean checks it.”** The tactic is spliced into a working copy and elaborated. If Lean accepts it, the frontier closes and **the map redraws itself around you** — every other place exactly where you left it.
+5. **Or start from scratch:** state a theorem in plain words, and watch a generated, Lean-verified proof appear as a map.
+
+## Four ways in, one session
+
+| Entry | What happens |
 | :--- | :--- |
-| `apps/cli/` | CLI: parse folder, start server, open browser |
-| `apps/server/` | HTTP API (repos, atlas, proof, neighbourhood, walk, chat, ingest jobs); layout/state live in a server store dir, never in the opened repo |
-| `apps/web/` | Atlas + proof map + egocentric panel + chat (no build step) |
-| `packages/core/` | Pure logic: canonical place keys, loop closure, proof-map model, stable layout, agent citation guard |
-| `lean/` | Lake project: `graspt-trace` / `graspt-atlas` Lean tooling (unchanged) |
-| `fixtures/demo/` | Pre-indexed traces of `lean/Demo/` for instant demo open |
-| `tests/` | Core + agent-guard tests (`npm test`) |
-| `docs/` | [Architecture](docs/architecture.md) |
+| **From scratch** | Plain-language intent → agent drafts whole-file Lean → tracer elaborates, diagnostics drive repair → only a verified proof becomes a map |
+| **Local Lean folder** | A project on your machine, traced read-only into the map |
+| **Remote repository** | Cloned into server scratch space, then traced the same way |
+| **Precomputed demos** | The built-in traced proofs — instant open, no Lean run |
+
+After entry, every session is identical: map, egocentric view, agent chat, and the same verified-action loop.
+
+## How it works
+
+```text
+graspt [folder]
+   │
+   ▼
+apps/cli ──► apps/server ──► packages/core ◄── lean/ (graspt-trace JSON)
+                 │                ▲
+                 ▼                │
+            apps/web ────────────┘  (start screen → map + egocentric strip + agent rail)
+                 ▲
+                 │ atlas (areas · landmarks · importance), built offline by setup
+            lean/Graspt/AtlasMain.lean
+```
+
+| Layer | What it does |
+| :--- | :--- |
+| `lean/` | The only Lean-facing code: `graspt-trace` elaborates files into goal/tactic graphs; `graspt-atlas` pre-maps all of Mathlib (446,916 declarations, 41 areas, 4,000 landmarks) |
+| `packages/core/` | Pure, tested logic: canonical place identity, loop closure, proof-map model, stable layout, citation validation |
+| `apps/server/` | HTTP API, ingestion, the persistent tracer, scratch generation, the verified apply action, staged provisioning |
+| `apps/web/` | React + shadcn: start screen, proof map (SVG), egocentric strip, agent chat rail |
+| `fixtures/demo/` | Pre-indexed traces so the demo opens instantly |
+
+**Invariants an evaluator can check:** places keyed by canonical `Γ ⊢ T`, never internal IDs · landmark colour encodes Mathlib area only · a `sorry` is a frontier, never a completion · nothing unverified is drawn as proved · opened repositories are never written on disk (verified work lives in a session working copy; landing it is a separate, deliberate act).
+
+## Reproducibility
+
+Setup is offline provisioning, never part of the demo path. It is staged and idempotent — Lean toolchain → Mathlib cache → global atlas — each stage skipping itself when fresh. The atlas is fingerprinted (SHA-256 over toolchain + Mathlib revision + the generator's own source and parameters) and validated by parsing before anything trusts it. `graspt doctor` prints machine-readable status; `graspt demo-ready` names the missing stage and its remedy.
+
+State lives in a persistent store (`GRASPT_STORE`, default `~/.graspt/store`). In a container, persist `~/.graspt` as a volume and start with `--no-open`. The supported reproduction path is a **git clone**; the npm tarball excludes the Lean tooling and is demo-grade only. A sandbox with no Lean and no network can still verify the product: typecheck, tests, and the fixture demo exercise it end to end.
+
+Chat calls Meta AI directly via the Vercel AI SDK (`muse-wonder-1.0` by default). Paste your key (`MODEL_API_KEY`) behind the **API key** button in the chat rail; it is stored server-side only (`~/.graspt/`, mode `0600`) and never returned to the browser.
+
+## Honest boundaries
+
+A demo that hides its limits will be found out; these are ours:
+
+- The verified apply action works at **open frontiers** with single-line tactics. Arbitrary mid-proof editing and multi-tactic autonomous repair are designed, not built.
+- Scratch generation is whole-file drafting with a bounded repair loop, not a stepwise prover. Lean verifies the *proof*; whether the formalised statement matches your English is yours to judge on the map.
+- One tracer process serves one file at a time (a fresh file pays a ~3s cold trace, then ~0.1s warm checks).
+- What is *proved* here is the loop: point → explain → propose → kernel-verifies → map moves. The wider claims — that spatial navigation becomes transparent faster than syntax fluency — are the experiment this demo invites you to run.
 
 ## Verify
 
 ```bash
-npm run typecheck && npm test   # repo CI gates
-npx graspt demo-ready           # on a set-up machine: all provisioning stages present
+npm run typecheck && npm test   # the repo's CI gates
+npx graspt demo-ready           # on a set-up machine: every stage, named
 ```
 
-## Demo note (hackathon)
+## Evaluating this repo in five minutes
 
-Demo runs in a GitHub Codespace (AMD EPYC, 4 cores) and is delivered as a recorded video. Pre-warm with `npm start` and the bundled demo repo; live ingestion is shown as a job, never waited on.
+1. `npm ci && npm start` — open the demo, close a frontier with Try, watch the map redraw.
+2. Read `packages/core/` — the philosophy as pure functions, each with tests at the contract.
+3. Read `apps/server/splice.ts` and `apps/server/generate.ts` — the two places agent output meets the kernel, and the exact conditions under which anything is believed.
+4. Check the invariants above against the code. They are load-bearing, not decorative.
