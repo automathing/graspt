@@ -4,7 +4,7 @@
 
 > *"A geometric and topological metaphor for the space of what humanity already knows, and what can be reached just by combining existing ideas."*
 
-Graspt is for people with mathematical intuition who are blocked by transcoding between ideas and Lean's symbolic language (see [sum_7.md](docs/decisions/sum_7.md), [sum_10.md](docs/decisions/sum_10.md)). Humans navigate and judge; the agent proposes from the same map; Lean verifies. The current surface is **read-only exploration**: contribution appears only as Lean-verified ghost previews, and the server has no code path that writes to your repo.
+Graspt is for people with mathematical intuition who are blocked by transcoding between ideas and Lean's symbolic language. Humans navigate and judge; the agent proposes from the same map; Lean verifies. The current surface is **read-only exploration**: contribution appears only as Lean-verified ghost previews, and the server has no code path that writes to your repo.
 
 ## Run it
 
@@ -39,7 +39,7 @@ Pre-indexed demo traces ship in `fixtures/demo/`, so the atlas opens instantly w
 | `lean/` | Lake project: `graspt-trace` / `graspt-atlas` Lean tooling (unchanged) |
 | `fixtures/demo/` | Pre-indexed traces of `lean/Demo/` for instant demo open |
 | `tests/` | Core + agent-guard tests (`npm test`) |
-| `docs/` | [Architecture](docs/architecture.md) and [decision logs](docs/decisions/README.md) |
+| `docs/` | [Architecture](docs/architecture.md) |
 
 ## Verify
 

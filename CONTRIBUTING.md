@@ -20,7 +20,7 @@ Node ≥ 20. The Lean tooling in `lean/` needs `elan` on PATH (`~/.elan/bin`); t
 
 ## Decisions
 
-Product and design decisions live in `docs/decisions/` (`sum_N.md` logs). A change that contradicts a Final record needs a new log entry saying why.
+Product and design decisions are settled with the maintainers before implementation. A change that contradicts a settled decision needs a new agreed decision saying why.
 
 ## Pull requests
 

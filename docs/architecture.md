@@ -19,6 +19,5 @@ apps/cli ──► apps/server ──► packages/core ◄── lean/ (graspt-t
 | Lean | `lean/` | `graspt-trace` / `graspt-atlas` executables; surface-independent, emits the frozen JSON contract |
 | Fixtures | `fixtures/demo/` | Pre-indexed traces of `lean/Demo/` for instant demo open |
 | Tests | `tests/` | Core + agent-guard tests (`node:test`) |
-| Decisions | `docs/decisions/` | `sum_N.md` design/decision logs — the project's design history |
 
 Invariants: places keyed by canonical `Γ ⊢ T` (never `MVarId`); landmark colour = Mathlib area only; agent output is untrusted until Lean or the citation guard validates it; layout/state persist only in the server store dir.

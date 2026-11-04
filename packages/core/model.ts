@@ -65,7 +65,7 @@ function isKernelNoise(name: string): boolean {
 /**
  * A landmark's area comes from the atlas entry when there is one, else from
  * being declared in the user's own file. Never guess an area from a constant's
- * name (sum_5 §3): an unmapped constant is Core, so its colour stays honest.
+ * name: an unmapped constant is Core, so its colour stays honest.
  */
 export function inferArea(name: string, local: Set<string>, entryArea?: string): string {
   if (entryArea) return entryArea;

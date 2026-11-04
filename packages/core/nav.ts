@@ -5,7 +5,7 @@ import type { DeclTrace, GoalView, GrasptMode, LocalView, Neighbourhood, ProofMa
 import { isSorryStep, relationOf } from './model';
 
 // ---------------------------------------------------------------------------
-// sum_5 §3: the single source of landmark colour. Colour = Mathlib area only;
+// The single source of landmark colour. Colour = Mathlib area only;
 // selection/cursor/frontier are rings and fills of other channels, never this.
 
 export const AREA_COLORS: Record<string, string> = {
@@ -33,7 +33,7 @@ export function areaColor(area?: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// sum_7 modes: Mode A (`explore`) is read-only; Mode B (`contribute`) is the
+// Modes: Mode A (`explore`) is read-only; Mode B (`contribute`) is the
 // only mode that may run frontier exploration or splice a ghost, and a ghost
 // may splice only when Lean verified it feasible.
 
@@ -57,7 +57,7 @@ function normalizeExpr(s: string): string {
 }
 
 /**
- * Readable canonical place text (sum_5 §2.2): a place is `Γ ⊢ T`, not just `T`.
+ * Readable canonical place text: a place is `Γ ⊢ T`, not just `T`.
  * Hypothesis names are dropped (α-level identity); hypothesis types are sorted
  * so order in the pretty-printer does not create distinct places.
  */
@@ -77,7 +77,7 @@ function fnv1a(s: string): string {
 }
 
 /**
- * Stable place identity for topological SLAM (sum_5 §2.2).
+ * Stable place identity for topological SLAM.
  * Hash of `canonicalGoalText`, so the same `Γ ⊢ T` across branches and
  * re-traces (where MVarIds change) maps to the same place, while the same
  * target under different hypotheses does not. Heuristic string identity,
@@ -301,7 +301,7 @@ export function computeLocalView(
 }
 
 /**
- * Egocentric neighbourhood (sum_5 §4): the current goal centred, with the
+ * Egocentric neighbourhood: the current goal centred, with the
  * nearest goals/landmarks around it. No fixed directions — ranking is graph
  * distance first (parent/child/sibling/attached landmark/equivalent), then
  * landmark usefulness (`uses`). Capped at 10 neighbours.

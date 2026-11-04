@@ -119,11 +119,11 @@ export interface MapEdge {
   kind: 'flow' | 'uses' | 'ghost' | 'equiv';
 }
 
-/** sum_7 two modes: A `explore` is read-only understanding; B `contribute` may verify and splice at the frontier. */
+/** Two modes: A `explore` is read-only understanding; B `contribute` may verify and splice at the frontier. */
 export type GrasptMode = 'explore' | 'contribute';
 
 // ---------------------------------------------------------------------------
-// Egocentric view (sum_7): cursor goal plus its nearest neighbours
+// Egocentric view: cursor goal plus its nearest neighbours
 
 
 export interface LocalView {
@@ -158,7 +158,7 @@ export interface Neighbour {
   tacticSuggestion?: string;
 }
 
-/** Egocentric view (sum_5 §4): current goal centred, nearest neighbours around it. */
+/** Egocentric view: current goal centred, nearest neighbours around it. */
 export interface Neighbourhood {
   centre: { goalId: string; canonicalKey: string; target: string; pp: string; isFrontier: boolean };
   neighbours: Neighbour[];

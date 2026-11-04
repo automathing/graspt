@@ -30,7 +30,7 @@ export interface LayoutEdge {
 }
 
 /**
- * Stable allocentric layout (sum_5 §2.3): saved positions are recovered by
+ * Stable allocentric layout: saved positions are recovered by
  * node id or, across re-traces where MVarIds change, by canonical goal key,
  * and are returned unchanged. Nodes with no saved position are placed next to
  * an already-placed flow neighbour. Returns `{}` when nothing is saved, which

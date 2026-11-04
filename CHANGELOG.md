@@ -5,7 +5,7 @@ All notable changes are documented here. Format follows [Keep a Changelog](https
 ## [Unreleased]
 
 ### Changed
-- Repository restructured into `apps/` (cli, server, web), `packages/core/`, `tests/`, `fixtures/`, and `docs/decisions/`. No behaviour change.
+- Repository restructured into `apps/` (cli, server, web), `packages/core/`, `tests/`, `fixtures/`, and `docs/`. No behaviour change.
 - Chat now calls the Meta AI API via the Vercel AI SDK (`ai` + `@ai-sdk/openai`, Responses API at `api.meta.ai`); pi and all other agent CLIs were removed.
 - API key UX: key prompt hides once a key is saved; a pasted curl/Bearer header has its token (and model) extracted; placeholder pastes (`$MODEL_API_KEY`) are rejected with a specific message instead of silently storing garbage.
 
@@ -22,4 +22,4 @@ All notable changes are documented here. Format follows [Keep a Changelog](https
 - Citation-validated agent responder, navigator walk over Lean-elaborated tactics, folder-ingestion jobs, pre-indexed demo fixtures.
 
 ### Removed
-- VS Code extension surface (`extension/`, VSIX packaging). Decision record: `docs/decisions/sum_9.md`–`sum_11.md`.
+- VS Code extension surface (`extension/`, VSIX packaging).

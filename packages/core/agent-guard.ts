@@ -1,4 +1,4 @@
-// Agent guardrails (sum_10 amendment 6): agent output is untrusted.
+// Agent guardrails: agent output is untrusted.
 // Citations must name nodes that exist in the graph; tactic suggestions are
 // never "proven" until Lean verifies them; oversized output is rejected.
 

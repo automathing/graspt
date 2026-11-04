@@ -26,7 +26,7 @@ test('canonicalGoalKey normalizes whitespace, hygiene markers, and unicode arrow
   assert.equal(canonicalGoalText('x✝¹ + y._@.Mathlib.hyg.42 = z'), '⊢ x + y = z');
 });
 
-test('sum_5: place identity includes hypothesis context, not just the target', () => {
+test('place identity includes hypothesis context, not just the target', () => {
   const ppA = 'i : ℤ\nh : i % 4 = 0\n⊢ stepSucc (ρ i) = ρ (i + 1)';
   const ppB = 'i : ℤ\nh : i % 4 = 1\n⊢ stepSucc (ρ i) = ρ (i + 1)';
   const ppA2 = 'j : ℤ\nh2 : i % 4 = 0\n⊢ stepSucc (ρ i) = ρ (i + 1)';
@@ -38,7 +38,7 @@ test('sum_5: place identity includes hypothesis context, not just the target', (
   assert.equal(canonicalGoalKey(target, ppA), canonicalGoalKey(target, ppA2));
 });
 
-test('sum_5: loop closure only for identical Γ ⊢ T', () => {
+test('loop closure only for identical Γ ⊢ T', () => {
   const goals = [
     { id: 'a', target: 'T', pp: 'h : P\n⊢ T' },
     { id: 'b', target: 'T', pp: 'h : Q\n⊢ T' },
@@ -180,7 +180,7 @@ test('computeLocalView gives parent and siblings for a branched goal', () => {
   assert.equal(local.siblings[0].goalId, 'g4');
 });
 
-test('sum_5: neighbourhood ranks nearest goals/landmarks around the cursor, capped at 10', () => {
+test('neighbourhood ranks nearest goals and landmarks around the cursor, capped at 10', () => {
   const decl = {
     name: 'nb_test', startLine: 1, endLine: 10,
     steps: [
@@ -226,7 +226,7 @@ test('buildProofMap tracks one lemma at full detail with no granularity level', 
   assert.equal(map.nodes.filter((n) => n.kind === 'move').length, 3);
 });
 
-test('sum_5 §2.3: re-trace never moves existing nodes; new nodes land next to their parent', () => {
+test('re-trace never moves existing nodes; new nodes land next to their parent', () => {
   const nodes = [
     { id: 'g:old1', kind: 'goal', canonicalKey: 'gk_a' },
     { id: 'g:old2', kind: 'goal', canonicalKey: 'gk_b' },
@@ -244,7 +244,7 @@ test('sum_5 §2.3: re-trace never moves existing nodes; new nodes land next to t
   assert.equal(Object.keys(out).length, 3);
 });
 
-test('sum_5 §3: landmark colour comes only from its Mathlib area; unknown areas are Core grey', () => {
+test('landmark colour comes only from its Mathlib area; unknown areas are Core grey', () => {
   assert.equal(areaColor('Mathlib.Algebra'), '#7a62c9');
   assert.equal(areaColor('Mathlib.Data.Nat.Basic'), areaColor('Mathlib.Data'));
   assert.equal(areaColor('Something.Unmapped'), areaColor('Core'));
@@ -255,7 +255,7 @@ test('sum_5 §3: landmark colour comes only from its Mathlib area; unknown areas
   assert.equal(inferArea('Nat.add_comm', new Set(), 'Mathlib.Data'), 'Mathlib.Data');
 });
 
-test('sum_7: Mode A is read-only; only Lean-verified ghosts splice, and only in Mode B', () => {
+test('Mode A is read-only; only Lean-verified ghosts splice, and only in Mode B', () => {
   assert.equal(canExplore('explore'), false);
   assert.equal(canExplore('contribute'), true);
   assert.equal(canSplice('contribute', true), true);
