@@ -203,6 +203,14 @@ test('neighbourhood ranks nearest goals and landmarks around the cursor, capped 
   assert.ok(nb.neighbours.every((n) => n.distance >= 1));
   // parent/sibling goals rank before any fill-in landmarks
   assert.equal(nb.neighbours[0].relation, 'parent');
+  // leaf goal g3 is a dead end (no child subgoals forward)
+  assert.equal(nb.neighbours.some((n) => n.relation === 'child'), false);
+
+  // parent goal g2 lists all spawned subgoals (g3 and g4) as child neighbours
+  const nbParent = neighbourhood(decl, map, 'g2');
+  assert.ok(nbParent);
+  const childIds = nbParent.neighbours.filter((n) => n.relation === 'child').map((n) => n.nodeId);
+  assert.deepEqual(childIds, ['g:g3', 'g:g4']);
 });
 
 test('buildProofMap tracks one lemma at full detail with no granularity level', () => {

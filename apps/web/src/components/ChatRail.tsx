@@ -140,7 +140,7 @@ export function ChatRail({ repoId, decl, goal, contextLabel, initialPrompt, onMa
         </div>
       )}
 
-      <div ref={logRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto" aria-live="polite">
+      <div ref={logRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1 scroll-smooth" aria-live="polite">
         {msgs.length === 0 && (
           <p className="rounded-md border border-stone-200 p-3 text-sm text-stone-500">
             Ask about the current proof, a nearby landmark, or what remains open. From scratch, tell the agent what to prove.

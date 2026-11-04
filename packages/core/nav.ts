@@ -325,7 +325,21 @@ export function neighbourhood(
   if (lv.parent?.goalId) {
     push({ nodeId: `g:${lv.parent.goalId}`, kind: 'goal', label: decl.goals.find((g) => g.id === lv.parent!.goalId)?.target ?? lv.parent.goalId, distance: 1, relation: 'parent' });
   }
-  if (lv.succ?.goalId && lv.succ.goalId !== 'known') {
+  if (lv.succ?.moveId) {
+    const childEdges = proofMap.edges.filter(
+      (e) => e.source === lv.succ!.moveId && e.kind === 'flow' && e.target !== 'known',
+    );
+    for (const ce of childEdges) {
+      const cid = ce.target.replace(/^g:/, '');
+      push({
+        nodeId: `g:${cid}`,
+        kind: goalNode(cid)?.kind === 'frontier' ? 'frontier' : 'goal',
+        label: decl.goals.find((g) => g.id === cid)?.target ?? cid,
+        distance: 1,
+        relation: 'child',
+      });
+    }
+  } else if (lv.succ?.goalId && lv.succ.goalId !== 'known') {
     push({ nodeId: `g:${lv.succ.goalId}`, kind: goalNode(lv.succ.goalId)?.kind === 'frontier' ? 'frontier' : 'goal', label: decl.goals.find((g) => g.id === lv.succ!.goalId)?.target ?? lv.succ.goalId, distance: 1, relation: 'child' });
   }
   for (const s of lv.siblings) {

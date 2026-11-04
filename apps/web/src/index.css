@@ -14,9 +14,43 @@
 
 html, body, #root { height: 100%; }
 body {
+  overflow-x: hidden;
   background:
     radial-gradient(1100px 500px at 85% -10%, rgba(29, 74, 61, .10), transparent 60%),
     var(--color-paper);
+}
+
+/* Clean, unobtrusive scrollbars across light and dark surfaces */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(113, 134, 122, 0.38) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(113, 134, 122, 0.38);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(20, 51, 43, 0.62);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.contours {
+  scrollbar-color: rgba(242, 198, 109, 0.32) transparent;
+}
+.contours::-webkit-scrollbar-thumb {
+  background-color: rgba(242, 198, 109, 0.32);
+}
+.contours::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(242, 198, 109, 0.55);
 }
 
 /* Contour-line texture for dark surfaces (start-screen intro, ego centre). */
