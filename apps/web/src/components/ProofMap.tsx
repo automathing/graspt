@@ -69,36 +69,67 @@ function layout(map: ProofMapData): Record<string, { x: number; y: number }> {
   }
 
   const centerX = 420;
-  const rowGap = 104;
   const out: Record<string, { x: number; y: number }> = {};
 
-  // Center each flow depth row horizontally with spacing proportional to node label widths
-  let maxRowHalfSpan = 160;
-  for (const [d, rowNodes] of byDepth) {
-    const widths = rowNodes.map((n) => Math.max(150, nodeBoxMetrics(n).pillW + 44));
+  // Compute proportional vertical y-coordinates per depth:
+  // Goal/Theorem rows have a bottom label plate (+36px), whereas Move rows are compact pills (±13px).
+  // Using 76px after a Goal row and 58px after a Move row makes the visible arrow lengths equal (~26px).
+  const sortedDepths = [...byDepth.keys()].sort((a, b) => a - b);
+  const depthY = new Map<number, number>();
+  let currY = 52;
+  for (let i = 0; i < sortedDepths.length; i++) {
+    const d = sortedDepths[i];
+    depthY.set(d, currY);
+    const rowNodes = byDepth.get(d) ?? [];
+    const isMoveRow = rowNodes.length > 0 && rowNodes.every((n) => n.kind === 'move');
+    currY += isMoveRow ? 58 : 76;
+  }
+
+  // Place each flow depth row centered around its parent's x (or canvas center) with proportional horizontal gaps
+  const rowBounds = new Map<number, { minX: number; maxX: number }>();
+  for (const d of sortedDepths) {
+    const rowNodes = byDepth.get(d) ?? [];
+    const y = depthY.get(d) ?? 52 + d * 68;
+    const widths = rowNodes.map((n) => nodeBoxMetrics(n).pillW + 28);
     const totalW = widths.reduce((a, b) => a + b, 0);
-    let cursorX = centerX - totalW / 2;
+
+    // Anchor row center toward the average x of incoming flow parents when available
+    const parentXs: number[] = [];
+    for (const n of rowNodes) {
+      for (const e of flow) {
+        if (e.target === n.id && out[e.source]) parentXs.push(out[e.source].x);
+      }
+    }
+    const anchorX = parentXs.length
+      ? parentXs.reduce((a, b) => a + b, 0) / parentXs.length
+      : centerX;
+
+    let cursorX = anchorX - totalW / 2;
+    let rMin = Infinity, rMax = -Infinity;
     rowNodes.forEach((n, idx) => {
       const w = widths[idx];
       const x = Math.round(cursorX + w / 2);
-      const y = 56 + d * rowGap;
       out[n.id] = { x, y };
+      rMin = Math.min(rMin, x - w / 2);
+      rMax = Math.max(rMax, x + w / 2);
       cursorX += w;
-      maxRowHalfSpan = Math.max(maxRowHalfSpan, Math.abs(x - centerX) + w / 2);
     });
+    rowBounds.set(d, { minX: rMin, maxX: rMax });
   }
 
-  // Place landmarks flanking the flow spine at the depth of the move they feed
+  // Place landmarks directly beside the Move node they feed with a proportional gap
   const rightCountByDepth = new Map<number, number>();
   const leftCountByDepth = new Map<number, number>();
   landmarks.forEach((lm, idx) => {
-    const targetMoves = uses
-      .filter((e) => e.source === lm.id)
-      .map((e) => depth.get(e.target))
-      .filter((d): d is number => d !== undefined);
-    const targetDepth = targetMoves.length
-      ? Math.round(targetMoves.reduce((a, b) => a + b, 0) / targetMoves.length)
+    const lmMetrics = nodeBoxMetrics(lm);
+    const targetMoveIds = uses.filter((e) => e.source === lm.id).map((e) => e.target);
+    const firstMoveId = targetMoveIds.find((id) => out[id] !== undefined);
+    const targetDepth = firstMoveId !== undefined
+      ? (depth.get(firstMoveId) ?? Math.min(maxFlowDepth, idx + 1))
       : Math.min(maxFlowDepth, idx + 1);
+    const y = depthY.get(targetDepth) ?? (52 + targetDepth * 68);
+    const rb = rowBounds.get(targetDepth) ?? { minX: centerX - 60, maxX: centerX + 60 };
+
     const placeRight = idx % 2 === 0;
     const slot = placeRight
       ? (rightCountByDepth.get(targetDepth) ?? 0)
@@ -106,11 +137,12 @@ function layout(map: ProofMapData): Record<string, { x: number; y: number }> {
     if (placeRight) rightCountByDepth.set(targetDepth, slot + 1);
     else leftCountByDepth.set(targetDepth, slot + 1);
 
-    const sideOffset = maxRowHalfSpan + 95 + slot * 175;
-    out[lm.id] = {
-      x: Math.round(placeRight ? centerX + sideOffset : centerX - sideOffset),
-      y: 56 + targetDepth * rowGap,
-    };
+    const gap = 42;
+    const stepW = lmMetrics.pillW + 26;
+    const x = placeRight
+      ? Math.round(rb.maxX + gap + lmMetrics.pillW / 2 + slot * stepW)
+      : Math.round(rb.minX - gap - lmMetrics.pillW / 2 - slot * stepW);
+    out[lm.id] = { x, y };
   });
 
   return out;
@@ -157,6 +189,7 @@ export function ProofMap({ map, colors, selectedId, onSelect }: {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const dragRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
 
   useEffect(() => {
     setZoom(1);
@@ -222,12 +255,45 @@ export function ProofMap({ map, colors, selectedId, onSelect }: {
   const viewBox = `${vx} ${vy} ${zw} ${zh}`;
   const svgHeight = Math.min(520, Math.max(340, Math.round(bounds.h * 0.85)));
 
+  // Non-passive wheel listener so two-finger trackpad scroll up/down smoothly zooms the map
+  // around the cursor without scrolling the outer browser page.
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = el.getBoundingClientRect();
+      const rx = rect.width > 0 ? (e.clientX - rect.left) / rect.width - 0.5 : 0;
+      const ry = rect.height > 0 ? (e.clientY - rect.top) / rect.height - 0.5 : 0;
+      const step = e.deltaMode === 1 ? e.deltaY * 18 : e.deltaY;
+      const sensitivity = e.ctrlKey ? 0.008 : 0.0024;
+      const factor = Math.exp(-step * sensitivity);
+      setZoom((prevZoom) => {
+        const nextZoom = Math.min(4.0, Math.max(0.45, Number((prevZoom * factor).toFixed(4))));
+        if (nextZoom !== prevZoom) {
+          const dInv = 1 / prevZoom - 1 / nextZoom;
+          setPan((prevPan) => ({
+            x: prevPan.x - rx * bounds.w * dInv,
+            y: prevPan.y - ry * bounds.h * dInv,
+          }));
+        }
+        return nextZoom;
+      });
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [bounds.w, bounds.h]);
+
   return (
     <div className="relative select-none">
-      <div className="absolute right-3 top-3 z-10 flex gap-1">
-        <button className="h-7 w-7 rounded-md border border-stone-300 bg-white/95 text-base leading-none shadow-xs hover:border-teal-700" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.55, z / 1.2))}>−</button>
+      <div className="absolute right-3 top-3 z-10 flex items-center gap-1">
+        <span className="rounded-md border border-stone-200 bg-white/90 px-1.5 py-0.5 font-mono text-[10px] text-stone-600">
+          {Math.round(zoom * 100)}%
+        </span>
+        <button className="h-7 w-7 rounded-md border border-stone-300 bg-white/95 text-base leading-none shadow-xs hover:border-teal-700" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.45, z / 1.2))}>−</button>
         <button className="h-7 rounded-md border border-stone-300 bg-white/95 px-2 text-xs font-semibold shadow-xs hover:border-teal-700" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>Fit</button>
-        <button className="h-7 w-7 rounded-md border border-stone-300 bg-white/95 text-base leading-none shadow-xs hover:border-teal-700" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(3.2, z * 1.2))}>+</button>
+        <button className="h-7 w-7 rounded-md border border-stone-300 bg-white/95 text-base leading-none shadow-xs hover:border-teal-700" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(4.0, z * 1.2))}>+</button>
       </div>
       <div className="absolute left-3 top-3 z-10 flex flex-wrap gap-1 text-[11px] font-semibold">
         {([['Goal', '#fff'], ['Landmark', '#c28a2d'], ['Frontier', '#f6ad55'], ['Move', '#dce5df'], ['Grounded', '#177245']] as const).map(([label, bg]) => (
@@ -235,9 +301,10 @@ export function ProofMap({ map, colors, selectedId, onSelect }: {
         ))}
       </div>
       <svg
+        ref={svgRef}
         viewBox={viewBox}
         preserveAspectRatio="xMidYMid meet"
-        style={{ height: `${svgHeight}px`, backgroundImage: 'radial-gradient(circle, #c9d6cc 1px, transparent 1px)', backgroundSize: '24px 24px' }}
+        style={{ height: `${svgHeight}px`, touchAction: 'none', backgroundImage: 'radial-gradient(circle, #c9d6cc 1px, transparent 1px)', backgroundSize: '24px 24px' }}
         className="block w-full cursor-grab bg-[#f7f8f4] active:cursor-grabbing"
         role="group"
         aria-label="Proof map. Tab through nodes, Enter to stand on one."
@@ -266,21 +333,51 @@ export function ProofMap({ map, colors, selectedId, onSelect }: {
         {map.edges.map((e) => {
           const a = pos[e.source], b = pos[e.target];
           if (!a || !b) return null;
+          const srcNode = map.nodes.find((n) => n.id === e.source);
+          const dstNode = map.nodes.find((n) => n.id === e.target);
+          const srcM = srcNode ? nodeBoxMetrics(srcNode) : undefined;
+          const dstM = dstNode ? nodeBoxMetrics(dstNode) : undefined;
           const onTrail = activeTrail.edgeIds.has(e.id);
           const cls = onTrail
             ? 'stroke-teal-700'
             : e.kind === 'equiv' ? 'stroke-amber-600 [stroke-dasharray:5_4]' : e.kind === 'uses' ? 'stroke-stone-300 [stroke-dasharray:2_4]' : 'stroke-[#91a79b]';
-          const dx = b.x - a.x;
-          const dy = b.y - a.y;
-          const dist = Math.hypot(dx, dy);
-          const startPad = e.kind === 'flow' ? 16 : 12;
-          const endPad = e.kind === 'flow' ? 19 : 14;
-          const x1 = dist > startPad + endPad ? a.x + (dx / dist) * startPad : a.x;
-          const y1 = dist > startPad + endPad ? a.y + (dy / dist) * startPad : a.y;
-          const x2 = dist > startPad + endPad ? b.x - (dx / dist) * endPad : b.x;
-          const y2 = dist > startPad + endPad ? b.y - (dy / dist) * endPad : b.y;
+
+          let x1 = a.x, y1 = a.y, x2 = b.x, y2 = b.y;
+          let pathD: string;
+
+          if (e.kind === 'uses' && Math.abs(b.y - a.y) < 30) {
+            const goRight = b.x >= a.x;
+            x1 = a.x + (goRight ? 15 : -15);
+            y1 = a.y;
+            const dstHalf = dstNode?.kind === 'move' && dstM ? dstM.pillW / 2 + 4 : 16;
+            x2 = b.x + (goRight ? -dstHalf : dstHalf);
+            y2 = b.y;
+            pathD = `M${x1},${y1} L${x2},${y2}`;
+          } else if (b.y > a.y + 18) {
+            // Downward flow edge: start below source node (or its label plate) and end at top of target shape
+            y1 = srcNode?.kind === 'move' ? a.y + 14 : a.y + 38;
+            y2 = dstNode?.kind === 'move' ? b.y - 15 : b.y - 18;
+            if (Math.abs(b.x - a.x) > 6) {
+              const midY = (y1 + y2) / 2;
+              pathD = `M${x1},${y1} C${x1},${midY} ${x2},${midY} ${x2},${y2}`;
+            } else {
+              pathD = `M${x1},${y1} L${x2},${y2}`;
+            }
+          } else {
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const dist = Math.hypot(dx, dy);
+            const startPad = 16;
+            const endPad = 19;
+            x1 = dist > startPad + endPad ? a.x + (dx / dist) * startPad : a.x;
+            y1 = dist > startPad + endPad ? a.y + (dy / dist) * startPad : a.y;
+            x2 = dist > startPad + endPad ? b.x - (dx / dist) * endPad : b.x;
+            y2 = dist > startPad + endPad ? b.y - (dy / dist) * endPad : b.y;
+            pathD = `M${x1},${y1} L${x2},${y2}`;
+          }
+
           return (
-            <path key={e.id} d={`M${x1},${y1} L${x2},${y2}`} className={`${cls} fill-none`}
+            <path key={e.id} d={pathD} className={`${cls} fill-none`}
               strokeWidth={onTrail ? '2.4' : '1.4'}
               markerEnd={onTrail ? 'url(#arrow-trail)' : e.kind === 'flow' ? 'url(#arrow-flow)' : undefined} />
           );
