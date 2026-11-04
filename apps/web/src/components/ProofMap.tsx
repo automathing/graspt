@@ -59,6 +59,25 @@ export function ProofMap({ map, colors, selectedId, onSelect }: {
 }) {
   const pos = useMemo(() => layout(map), [map]);
   const [zoom, setZoom] = useState(1);
+
+  // Compute ancestor flow path (edges & nodes) from root theorem to selectedId for perceptual backtracing
+  const activeTrail = useMemo(() => {
+    const edgeIds = new Set<string>();
+    const nodeIds = new Set<string>();
+    if (!selectedId) return { edgeIds, nodeIds };
+    const flowEdges = map.edges.filter((e) => e.kind === 'flow');
+    let curr: string | undefined = selectedId;
+    let safety = 60;
+    while (curr && safety-- > 0) {
+      nodeIds.add(curr);
+      const inc = flowEdges.find((e) => e.target === curr);
+      if (!inc) break;
+      edgeIds.add(inc.id);
+      curr = inc.source;
+    }
+    return { edgeIds, nodeIds };
+  }, [map, selectedId]);
+
   const maxX = Math.max(...Object.values(pos).map((p) => p.x), 600);
   const maxY = Math.max(...Object.values(pos).map((p) => p.y), 400);
   const w = maxX + 240, h = maxY + 110;
@@ -77,18 +96,28 @@ export function ProofMap({ map, colors, selectedId, onSelect }: {
           <span key={label} className="rounded-full border border-stone-200 bg-white/95 px-2 py-0.5"><i className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: bg }} />{label}</span>
         ))}
       </div>
-      <svg viewBox={viewBox} className="block h-[560px] w-full bg-[#f7f8f4]" role="group" aria-label="Proof map. Tab through nodes, Enter to stand on one."
+      <svg viewBox={viewBox} className="block h-[500px] w-full bg-[#f7f8f4]" role="group" aria-label="Proof map. Tab through nodes, Enter to stand on one."
         style={{ backgroundImage: 'radial-gradient(circle, #c9d6cc 1px, transparent 1px)', backgroundSize: '24px 24px' }}>
         <defs>
           <marker id="arrow-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
             <path d="M0,0 L10,5 L0,10 Z" fill="#71867a" />
           </marker>
+          <marker id="arrow-trail" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 Z" fill="#0f766e" />
+          </marker>
         </defs>
         {map.edges.map((e) => {
           const a = pos[e.source], b = pos[e.target];
           if (!a || !b) return null;
-          const cls = e.kind === 'equiv' ? 'stroke-amber-600 [stroke-dasharray:5_4]' : e.kind === 'uses' ? 'stroke-stone-300 [stroke-dasharray:2_4]' : 'stroke-[#91a79b]';
-          return <path key={e.id} d={`M${a.x},${a.y} L${b.x},${b.y}`} className={`${cls} fill-none`} strokeWidth="1.35" markerEnd={e.kind === 'flow' ? 'url(#arrow-flow)' : undefined} />;
+          const onTrail = activeTrail.edgeIds.has(e.id);
+          const cls = onTrail
+            ? 'stroke-teal-700'
+            : e.kind === 'equiv' ? 'stroke-amber-600 [stroke-dasharray:5_4]' : e.kind === 'uses' ? 'stroke-stone-300 [stroke-dasharray:2_4]' : 'stroke-[#91a79b]';
+          return (
+            <path key={e.id} d={`M${a.x},${a.y} L${b.x},${b.y}`} className={`${cls} fill-none`}
+              strokeWidth={onTrail ? '2.6' : '1.35'}
+              markerEnd={onTrail ? 'url(#arrow-trail)' : e.kind === 'flow' ? 'url(#arrow-flow)' : undefined} />
+          );
         })}
         {map.nodes.map((n) => {
           const p = pos[n.id];
@@ -100,13 +129,17 @@ export function ProofMap({ map, colors, selectedId, onSelect }: {
             : n.kind === 'move' ? '#dce5df' : '#ffffff';
           const stroke = n.kind === 'goal' || n.kind === 'theorem' ? '#0f766e' : n.kind === 'frontier' ? '#c56b12' : '#71867a';
           const selected = selectedId === n.id;
+          const onTrail = !selected && activeTrail.nodeIds.has(n.id);
           return (
             <g key={n.id} transform={`translate(${p.x},${p.y})`} tabIndex={0} role="button"
               aria-label={`${n.kind}: ${n.label}`}
               className="cursor-pointer focus:outline-none"
               onClick={() => onSelect(n)}
               onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onSelect(n); } }}>
-              <circle r="24" fill="transparent" stroke={selected ? '#c28a2d' : 'transparent'} strokeWidth={selected ? 3 : 0} strokeDasharray={selected ? '4 3' : undefined} />
+              <circle r="24" fill="transparent"
+                stroke={selected ? '#c28a2d' : onTrail ? '#0f766e' : 'transparent'}
+                strokeWidth={selected ? 3 : onTrail ? 2 : 0}
+                strokeDasharray={selected ? '4 3' : onTrail ? '2 3' : undefined} />
               <title>{`${n.kind}: ${n.label}`}</title>
               {shape(n, fill, stroke)}
               <text x="19" y="4" className="fill-stone-900 font-mono text-[10px] font-semibold" style={{ paintOrder: 'stroke', stroke: 'rgba(255,255,255,.92)', strokeWidth: 3 }}>

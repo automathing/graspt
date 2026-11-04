@@ -29,24 +29,19 @@ Run these steps in order. Each stage skips itself when already fresh.
 
 3. **Run staged provisioning as ONE long job:**
    ```bash
-   npx graspt setup
+   npm run setup
    ```
-   - **Stage 1 (`install-lean`):** Installs `elan` (if absent) and toolchain `leanprover/lean4:v4.36.0-rc2`.
-   - **Stage 2 (`fetch-mathlib`):** Runs `lake exe cache get` inside `lean/` (~8 GB into `lean/.lake`).
+   *(Or `npx graspt setup` after `npm run build`.)*
+   - **Stage 1 (`install-lean`):** Installs `elan` (if absent) and toolchain `leanprover/lean4:v4.36.0-rc2` (verified inside `lean/`).
+   - **Stage 2 (`fetch-mathlib`):** Runs `lake exe cache get` inside `lean/` (~8 GB into `lean/.lake`) and builds the persistent tracer binary `lake build graspt-trace` (`lean/.lake/build/bin/graspt-trace`).
    - **Stage 3 (`generate-atlas`):** Runs `lake exe graspt-atlas <store>/atlas Mathlib`. Imports all of Mathlib in a single pass (takes several minutes and ~8–12 GB RAM). Writes `atlas.json`, `importance.json`, and an atomic `setup-manifest.json` fingerprinted with SHA-256 over toolchain + Mathlib revision + `AtlasMain.lean` source.
-   - *Note:* Run `npx graspt setup` without a short shell timeout. An interrupted stage safely restarts that stage on the next run.
+   - *Note:* Run `npm run setup` without a short shell timeout. An interrupted stage safely restarts that stage on the next run.
 
-4. **Build the persistent tracer binary (if not yet built):**
+4. **Verify offline demo readiness:**
    ```bash
-   (cd lean && lake build graspt-trace)
+   npm run demo-ready
    ```
-   *Completion criterion:* `lean/.lake/build/bin/graspt-trace` exists and is executable.
-
-5. **Verify offline demo readiness:**
-   ```bash
-   npx graspt demo-ready
-   ```
-   *Completion criterion:* Exits `0` with `"ready": true` and `lean`, `mathlib`, `atlas`, and `fixtures` stages all `"ok": true`. (`npx graspt doctor` prints full machine-readable status JSON.)
+   *Completion criterion:* Exits `0` with `"ready": true` and `lean`, `mathlib` (including `graspt-trace`), `atlas`, and `fixtures` stages all `"ok": true`. (`npm run doctor` prints full machine-readable status JSON.)
 
 ### Path B — Restricted Sandbox (No Network or No Lean Toolchain)
 

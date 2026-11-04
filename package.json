@@ -34,6 +34,9 @@
     "build": "tsc -p tsconfig.json && npm run build:web",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test \"dist/tests/*.test.js\"",
+    "setup": "npm run build && node dist/apps/cli/graspt.js setup",
+    "doctor": "npm run build && node dist/apps/cli/graspt.js doctor",
+    "demo-ready": "npm run build && node dist/apps/cli/graspt.js demo-ready",
     "start": "npm run build && node dist/apps/cli/graspt.js",
     "build:web": "vite build --config apps/web/vite.config.mts",
     "dev:web": "vite --config apps/web/vite.config.mts"

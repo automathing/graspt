@@ -100,17 +100,31 @@ export interface SetupStatus {
 export async function setupStatus(storeDir: string = defaultStoreDir()): Promise<SetupStatus> {
   const leanBin = await which('lean');
   const lakeBin = await which('lake');
-  let leanVersion: string | undefined;
-  if (leanBin) { const r = await run('lean', ['--version'], { timeoutMs: 15000 }); leanVersion = r.stdout.trim().split('\n')[0]; }
   const project = bundledLeanProject();
+  let leanVersion: string | undefined;
+  let toolchainReady = false;
+  if (leanBin) {
+    const r = await run('lean', ['--version'], { cwd: project, timeoutMs: 15000 });
+    if (r.code === 0) {
+      leanVersion = r.stdout.trim().split('\n')[0];
+      toolchainReady = true;
+    }
+  }
   const mathlibCached = !!project && fs.existsSync(path.join(project, '.lake', 'packages', 'mathlib'));
+  const tracerBuilt = !!project && fs.existsSync(path.join(project, '.lake', 'build', 'bin', 'graspt-trace'));
   const fresh = atlasFresh(storeDir);
   return {
-    lean: { installed: !!leanBin, version: leanVersion, lake: !!lakeBin },
+    lean: { installed: toolchainReady && !!lakeBin, version: leanVersion, lake: !!lakeBin },
     mathlib: {
-      cached: mathlibCached,
+      cached: mathlibCached && tracerBuilt,
       project,
-      note: mathlibCached ? 'Mathlib cache present in the bundled lean/ project.' : project ? 'Bundled lean/ project found but Mathlib cache missing — run: graspt setup' : 'No bundled Lean project in this install; Mathlib comes with any cloned/opened Lake project (lake exe cache get).',
+      note: mathlibCached && tracerBuilt
+        ? 'Mathlib cache and graspt-trace binary present in the bundled lean/ project.'
+        : mathlibCached && !tracerBuilt
+          ? 'Mathlib cache present, but graspt-trace binary is not built yet — run: graspt setup'
+          : project
+            ? 'Bundled lean/ project found but Mathlib cache missing — run: graspt setup'
+            : 'No bundled Lean project in this install; Mathlib comes with any cloned/opened Lake project (lake exe cache get).',
     },
     atlas: {
       cached: fresh.ok,
@@ -176,11 +190,19 @@ export function fetchMathlib(projectDir?: string): SetupJob {
   return startJob('fetch-mathlib', async (job) => {
     const project = projectDir ?? bundledLeanProject();
     if (!project) throw new Error('No Lean project available for Mathlib. Clone or open a Lake project first.');
-    job.detail = `lake exe cache get in ${project} (large download)`;
-    const r = await run('lake', ['exe', 'cache', 'get'], { cwd: project, timeoutMs: 900_000 });
-    if (r.timedOut) throw new Error('Mathlib cache download timed out after 900s');
-    if (r.code !== 0) throw new Error(`lake exe cache get failed: ${(r.stderr || r.stdout).slice(-400)}`);
-    job.detail = 'Mathlib cache fetched';
+    if (!fs.existsSync(path.join(project, '.lake', 'packages', 'mathlib'))) {
+      job.detail = `lake exe cache get in ${project} (large download)`;
+      const r = await run('lake', ['exe', 'cache', 'get'], { cwd: project, timeoutMs: 900_000 });
+      if (r.timedOut) throw new Error('Mathlib cache download timed out after 900s');
+      if (r.code !== 0) throw new Error(`lake exe cache get failed: ${(r.stderr || r.stdout).slice(-400)}`);
+    }
+    if (!fs.existsSync(path.join(project, '.lake', 'build', 'bin', 'graspt-trace'))) {
+      job.detail = `lake build graspt-trace in ${project}`;
+      const b = await run('lake', ['build', 'graspt-trace'], { cwd: project, timeoutMs: 600_000 });
+      if (b.timedOut) throw new Error('graspt-trace build timed out after 600s');
+      if (b.code !== 0) throw new Error(`lake build graspt-trace failed: ${(b.stderr || b.stdout).slice(-400)}`);
+    }
+    job.detail = 'Mathlib cache fetched and graspt-trace built';
   });
 }
 

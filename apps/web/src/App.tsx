@@ -30,7 +30,9 @@ export default function App() {
   const [jobStatus, setJobStatus] = useState('');
   const [scratchPrompt, setScratchPrompt] = useState('');
   const [chatSeed, setChatSeed] = useState('');
+  const [walkOpen, setWalkOpen] = useState(false);
   const [walkText, setWalkText] = useState('');
+  const [declsOpen, setDeclsOpen] = useState(true);
 
   const repo = repos.find((r) => r.id === repoId);
 
@@ -57,7 +59,7 @@ export default function App() {
 
   async function enterWorkspace(id: string) {
     setRepoId(id);
-    setDecl(undefined); setMap(null); setGoal(undefined); setNb(null); setSelectedNode(undefined);
+    setDecl(undefined); setMap(null); setGoal(undefined); setNb(null); setSelectedNode(undefined); setDeclsOpen(true);
     await loadAtlas(id);
     setScreen('workspace');
   }
@@ -113,7 +115,8 @@ export default function App() {
 
   async function openProof(name: string, id: string = repoId) {
     setDecl(name);
-    setGoal(undefined); setNb(null); setSelectedNode(undefined); setWalkText('');
+    setDeclsOpen(false);
+    setGoal(undefined); setNb(null); setSelectedNode(undefined); setWalkOpen(false); setWalkText('');
     const m = await api<ProofMapData>(`/api/repos/${encodeURIComponent(id)}/proof/${encodeURIComponent(name)}`);
     setMap(m);
     const root = m.nodes.find((n) => n.kind === 'theorem');
@@ -133,11 +136,51 @@ export default function App() {
     if (!(view as any)?.error) setNb(view);
   }
 
-  async function walk() {
+  async function toggleWalk() {
     if (!decl) return;
+    if (walkOpen) {
+      setWalkOpen(false);
+      return;
+    }
+    setWalkOpen(true);
     const w = await api<any>(`/api/repos/${encodeURIComponent(repoId)}/walk/${encodeURIComponent(decl)}${goal ? `?goal=${encodeURIComponent(goal)}` : ''}`);
     setWalkText(!w || w.error ? 'no walk available' : (w.steps?.length ? `walk: ${w.steps.map((s: any) => s.tactic).join(' → ')} (${w.note})` : w.note));
   }
+
+  // Interactive step-by-step backtrace chain from root theorem to the currently selected node
+  const backtraceSteps = useMemo(() => {
+    if (!map || !selectedNode) return [];
+    const flowEdges = map.edges.filter((e) => e.kind === 'flow');
+    const nodesById = new Map(map.nodes.map((n) => [n.id, n]));
+    const chain: { goalNode: MapNode; moveLabel?: string }[] = [];
+    let currId: string | undefined = selectedNode.id;
+    let safety = 40;
+    while (currId && safety-- > 0) {
+      const currNode = nodesById.get(currId);
+      if (!currNode) break;
+      const incToGoal = flowEdges.find((e) => e.target === currId);
+      if (!incToGoal) {
+        if (currNode.kind === 'theorem' || currNode.kind === 'goal' || currNode.kind === 'frontier') {
+          chain.unshift({ goalNode: currNode });
+        }
+        break;
+      }
+      const prevNode = nodesById.get(incToGoal.source);
+      if (prevNode?.kind === 'move') {
+        if (currNode.kind === 'theorem' || currNode.kind === 'goal' || currNode.kind === 'frontier') {
+          chain.unshift({ goalNode: currNode, moveLabel: prevNode.label });
+        }
+        const incToMove = flowEdges.find((e) => e.target === prevNode.id);
+        currId = incToMove?.source;
+      } else {
+        if (currNode.kind === 'theorem' || currNode.kind === 'goal' || currNode.kind === 'frontier') {
+          chain.unshift({ goalNode: currNode });
+        }
+        currId = incToGoal.source;
+      }
+    }
+    return chain;
+  }, [map, selectedNode]);
 
   const visibleDecls = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -231,72 +274,215 @@ export default function App() {
         {atlas && <span className="text-xs text-stone-400">{atlas.declarations} declarations · {atlas.landmarks.length} landmarks · {(atlas.decls ?? []).reduce((a, d) => a + d.frontier, 0)} open frontiers</span>}
       </header>
 
-      <div className="grid flex-1 gap-4 p-4 sm:px-6 lg:grid-cols-[280px_minmax(0,1fr)_380px]">
-        <aside className="space-y-3" aria-label="Declarations">
-          <Input type="search" placeholder="Search declarations…" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search declarations" />
-          {presentAreas.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {presentAreas.map(([area, c]) => (
-                <span key={area} className="inline-flex items-center gap-1.5 rounded-full border border-stone-200 bg-white px-2 py-0.5 text-[11px] font-semibold"><i className="h-2 w-2 rounded-full" style={{ background: c }} />{area}</span>
-              ))}
-            </div>
+      <div className="grid flex-1 gap-4 p-4 sm:px-6 lg:grid-cols-[minmax(0,1fr)_390px]">
+        <main className="min-w-0 space-y-3">
+          {(declsOpen || !decl) && (
+            <section className="rounded-lg border border-stone-200 bg-white/90 p-2.5 shadow-sm" aria-label="Declarations">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2">
+                <div className="flex items-center gap-2">
+                  <Input type="search" placeholder="Filter declarations…" value={search} onChange={(e) => setSearch(e.target.value)}
+                    aria-label="Search declarations" className="h-8 w-52 bg-white text-xs sm:w-64" />
+                  <span className="text-xs text-stone-500">{visibleDecls.length}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {presentAreas.map(([area, c]) => (
+                    <span key={area} className="inline-flex items-center gap-1 rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5 text-[10px] font-semibold">
+                      <i className="h-2 w-2 rounded-full" style={{ background: c }} />{area}
+                    </span>
+                  ))}
+                  {decl && (
+                    <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-stone-500" onClick={() => setDeclsOpen(false)}>
+                      Hide
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <div className="flex gap-2 overflow-x-auto pb-1 pt-0.5">
+                {visibleDecls.map((d) => {
+                  const active = decl === d.name;
+                  const pct = d.goals > 0 ? Math.max(0, Math.min(100, Math.round(((d.goals - d.frontier) / d.goals) * 100))) : 100;
+                  return (
+                    <button key={d.name} onClick={() => openProof(d.name)}
+                      className={`group w-52 shrink-0 rounded-md border px-2.5 py-2 text-left transition-all ${active ? 'border-teal-800 bg-teal-50/90 ring-1 ring-teal-700/40' : 'border-stone-200 bg-white hover:border-teal-700'}`}>
+                      <span className="flex items-center justify-between gap-1.5">
+                        <b className="truncate font-mono text-xs text-stone-900" title={d.name}>{d.name}</b>
+                        <Badge variant={d.complete ? 'success' : 'warning'} className="px-1.5 py-0 text-[10px]">
+                          {d.complete ? 'Done' : `${d.frontier} open`}
+                        </Badge>
+                      </span>
+                      <span className="mt-1.5 block h-1 overflow-hidden rounded-full bg-stone-200">
+                        <i className="block h-full bg-teal-700" style={{ width: `${pct}%` }} />
+                      </span>
+                      <span className="mt-1 block text-[11px] text-stone-500">{d.steps} steps · {d.goals} goals</span>
+                    </button>
+                  );
+                })}
+                {visibleDecls.length === 0 && (
+                  <p className="py-2 text-xs text-stone-500">{atlas ? 'No declarations match.' : 'No declarations yet.'}</p>
+                )}
+              </div>
+            </section>
           )}
-          <div className="space-y-2">
-            {visibleDecls.map((d) => (
-              <button key={d.name} onClick={() => openProof(d.name)}
-                className={`w-full rounded-lg border p-3 text-left shadow-sm transition-colors ${decl === d.name ? 'border-teal-800 bg-teal-50' : 'border-stone-200 bg-white hover:border-teal-700'}`}>
-                <span className="flex items-start justify-between gap-2">
-                  <b className="break-all font-mono text-[13px]">{d.name}</b>
-                  <Badge variant={d.complete ? 'success' : 'warning'}>{d.complete ? 'Complete' : 'Open'}</Badge>
-                </span>
-                <span className="mt-1.5 block h-1.5 overflow-hidden rounded-full bg-stone-200"><i className="block h-full bg-teal-700" style={{ width: `${d.goals > 0 ? Math.max(0, Math.min(100, Math.round(((d.goals - d.frontier) / d.goals) * 100))) : 100}%` }} /></span>
-                <span className="mt-1 block text-xs text-stone-500">{d.steps} steps · {d.goals} goals · {d.frontier} frontier</span>
-              </button>
-            ))}
-            {visibleDecls.length === 0 && <p className="text-sm text-stone-500">{atlas ? 'No declarations match your search.' : 'No declarations yet — direct the agent in the chat.'}</p>}
-          </div>
-        </aside>
 
-        <main className="min-w-0 space-y-4">
           {decl && map ? (
             <>
-              <div className="flex flex-wrap items-center gap-3 rounded-lg border border-stone-200 bg-white p-3 shadow-sm">
-                <div className="min-w-52 flex-1">
-                  <p className="text-[11px] font-extrabold uppercase tracking-widest text-teal-800">Allocentric proof map</p>
-                  <h2 className="break-all font-mono text-lg font-bold">{decl}</h2>
-                  <span className="text-xs text-stone-500">{map.stats.steps} steps · {map.stats.goals} goals · {map.stats.frontier} frontier · {map.stats.landmarks} landmarks</span>
+              <div className="rounded-lg border border-stone-200 bg-white p-3 shadow-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="min-w-52 flex-1">
+                    <p className="text-[11px] font-extrabold uppercase tracking-widest text-teal-800">Allocentric proof map</p>
+                    <div className="flex flex-wrap items-baseline gap-2.5">
+                      <h2 className="break-all font-mono text-base font-bold">{decl}</h2>
+                      <span className="text-xs text-stone-500">{map.stats.steps} steps · {map.stats.goals} goals · {map.stats.frontier} frontier · {map.stats.landmarks} landmarks</span>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-expanded={declsOpen}
+                    onClick={() => setDeclsOpen((o) => !o)}>
+                    {declsOpen ? 'Hide declarations' : `Declarations (${visibleDecls.length})`}
+                  </Button>
+                  <Button
+                    variant={walkOpen ? 'default' : 'secondary'}
+                    size="sm"
+                    aria-pressed={walkOpen}
+                    onClick={toggleWalk}>
+                    {walkOpen ? 'Hide walk' : 'Navigator walk'}
+                  </Button>
                 </div>
-                <Button variant="secondary" size="sm" onClick={walk}>Navigator walk</Button>
+                {walkOpen && walkText && (
+                  <div className="mt-2.5 rounded-md border border-teal-800/20 bg-teal-50/60 px-3 py-2 font-mono text-xs text-teal-950" role="status">
+                    {walkText}
+                  </div>
+                )}
               </div>
-              {walkText && <p className="break-words text-sm text-teal-900" role="status">{walkText}</p>}
+
               <Card className="overflow-hidden">
                 <ProofMap map={map} colors={colors} selectedId={selectedNode?.id} onSelect={selectGoal} />
-                <p className="border-t border-stone-200 px-3 py-2 text-xs text-stone-500">Tab through nodes, press Enter to stand on one — the egocentric view below follows, and the agent’s context moves with you.</p>
               </Card>
 
-              <Card aria-label="Egocentric view">
-                <CardContent className="grid gap-5 pt-5 lg:grid-cols-[1.25fr_.75fr_1.6fr]">
-                  <div>
-                    <p className="text-[11px] font-extrabold uppercase tracking-widest text-teal-800">Egocentric — where am I?</p>
-                    <pre className="contours mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-forest-deep p-3.5 font-mono text-xs leading-relaxed text-teal-50 shadow-inner">
-                      {selectedNode && !nb ? `${selectedNode.label}\nKind: ${selectedNode.kind}${selectedNode.area ? `\nArea: ${selectedNode.area}` : ''}${selectedNode.uses !== undefined ? `\nUses: ${selectedNode.uses}` : ''}${selectedNode.kind === 'landmark' ? '\n\nSuggested tactic is unverified until Lean checks it.' : ''}` : nb ? (nb.centre.pp || nb.centre.target) : 'Click a goal node.'}
-                    </pre>
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500">Trail from root</h3>
-                    <p className="mt-2 break-words font-mono text-xs leading-relaxed text-stone-600">{nb ? (nb.trail.length ? nb.trail.join(' → ') : 'At the root goal.') : 'Select a circular goal node.'}</p>
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-stone-500">Nearest neighbours</h3>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      {(nb?.neighbours ?? []).map((n) => (
-                        <button key={n.nodeId} className="rounded-md border border-stone-200 bg-white p-2.5 text-left hover:border-teal-700"
-                          onClick={() => { const node = map.nodes.find((x) => x.id === n.nodeId); if (node) void selectGoal(node); }}>
-                          <b className="block break-words font-mono text-[13px]">{n.kind === 'landmark' && <i className="mr-1.5 inline-block h-2 w-2 rounded-full" style={{ background: areaColor(colors, n.area) }} />}{n.label}</b>
-                          <span className="mt-0.5 block text-xs text-stone-500">{n.relation} · distance {n.distance}{n.area ? ` · ${n.area}` : ''}{n.tacticSuggestion ? ` · suggested (unverified): ${n.tacticSuggestion}` : ''}</span>
+              <Card aria-label="Egocentric view" className="border-stone-300">
+                <CardContent className="space-y-4 pt-4">
+                  <div className="rounded-md border border-stone-200 bg-stone-50/90 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-extrabold uppercase tracking-wider text-stone-600">
+                        Backtrace
+                      </span>
+                      {backtraceSteps.length > 1 && (
+                        <button
+                          className="rounded border border-teal-700/40 bg-white px-2 py-0.5 font-mono text-[11px] font-semibold text-teal-900 hover:bg-teal-50"
+                          onClick={() => void selectGoal(backtraceSteps[backtraceSteps.length - 2].goalNode)}>
+                          ↑ Step back
                         </button>
-                      ))}
-                      {!nb && <p className="text-sm text-stone-500">Select a goal to see what is near it.</p>}
+                      )}
+                    </div>
+                    {backtraceSteps.length > 0 ? (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                        {backtraceSteps.map((step, idx) => {
+                          const isCurrent = step.goalNode.id === selectedNode?.id;
+                          const shortLabel = (step.goalNode.label || '').split('\n').pop()?.slice(0, 32) || step.goalNode.id;
+                          return (
+                            <span key={step.goalNode.id} className="inline-flex items-center gap-1.5">
+                              {step.moveLabel && (
+                                <span className="rounded bg-stone-200/80 px-1.5 py-0.5 font-mono text-[11px] text-stone-700" title="Tactic move">
+                                  ─[{step.moveLabel}]→
+                                </span>
+                              )}
+                              <button
+                                onClick={() => void selectGoal(step.goalNode)}
+                                className={`rounded-md border px-2 py-0.5 font-mono text-xs transition-colors ${
+                                  isCurrent
+                                    ? 'border-brass bg-forest text-stone-50 font-bold shadow-sm'
+                                    : 'border-stone-300 bg-white text-stone-800 hover:border-teal-700 hover:bg-teal-50'
+                                }`}
+                                title={`Step ${idx + 1}: ${step.goalNode.label}`}>
+                                <span className="mr-1 opacity-60">#{idx + 1}</span>
+                                {idx === 0 ? 'Root' : shortLabel}
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="mt-1 font-mono text-xs text-stone-500">
+                        {nb ? (nb.trail.length ? nb.trail.join(' → ') : 'Root') : '—'}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-[1.05fr_1.45fr]">
+                    <div className="flex flex-col">
+                      <div className="flex items-center justify-between">
+                        <p className="text-[11px] font-extrabold uppercase tracking-widest text-teal-800">Egocentric (Γ ⊢ T)</p>
+                        {nb?.centre.isFrontier && <Badge variant="warning" className="text-[10px]">Open Frontier</Badge>}
+                      </div>
+                      <pre className="contours mt-1.5 flex-1 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-forest-deep p-3.5 font-mono text-xs leading-relaxed text-teal-50 shadow-inner">
+                        {selectedNode && !nb
+                          ? `${selectedNode.label}\nKind: ${selectedNode.kind}${selectedNode.area ? `\nArea: ${selectedNode.area}` : ''}${selectedNode.uses !== undefined ? `\nUses: ${selectedNode.uses}` : ''}`
+                          : nb
+                            ? (nb.centre.pp || nb.centre.target)
+                            : '—'}
+                      </pre>
+                    </div>
+
+                    <div className="space-y-2.5">
+                      <h3 className="text-[11px] font-extrabold uppercase tracking-widest text-stone-600">Nearest Neighbours</h3>
+                      {nb ? (
+                        <div className="space-y-2.5">
+                          {nb.neighbours.some((n) => n.relation !== 'landmark') && (
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              {nb.neighbours.filter((n) => n.relation !== 'landmark').map((n) => {
+                                const dirBadge = n.relation === 'parent' ? '↑ Parent'
+                                  : n.relation === 'child' ? '↓ Subgoal'
+                                  : n.relation === 'sibling' ? '↔ Sibling'
+                                  : '≡ Equivalent';
+                                const borderTone = n.relation === 'parent' ? 'border-l-4 border-l-teal-700'
+                                  : n.kind === 'frontier' ? 'border-l-4 border-l-amber-500'
+                                  : 'border-l-4 border-l-stone-400';
+                                return (
+                                  <button key={n.nodeId}
+                                    className={`rounded-md border border-stone-200 ${borderTone} bg-stone-50/70 px-2.5 py-2 text-left transition-colors hover:border-teal-700 hover:bg-teal-50/40`}
+                                    onClick={() => { const node = map.nodes.find((x) => x.id === n.nodeId); if (node) void selectGoal(node); }}>
+                                    <span className="flex items-center justify-between gap-1 text-[10px] font-bold uppercase tracking-wider text-teal-900">
+                                      <span>{dirBadge}</span>
+                                      <span className="font-normal text-stone-400">d={n.distance}</span>
+                                    </span>
+                                    <b className="mt-0.5 block truncate font-mono text-xs text-stone-900" title={n.label}>{n.label}</b>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          {nb.neighbours.some((n) => n.relation === 'landmark') && (
+                            <div>
+                              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-stone-500">Landmarks</p>
+                              <div className="grid gap-1.5 sm:grid-cols-2">
+                                {nb.neighbours.filter((n) => n.relation === 'landmark').map((n) => (
+                                  <button key={n.nodeId}
+                                    className="flex flex-col justify-between rounded-md border border-stone-200 bg-white px-2.5 py-1.5 text-left transition-colors hover:border-teal-700"
+                                    onClick={() => { const node = map.nodes.find((x) => x.id === n.nodeId); if (node) void selectGoal(node); }}>
+                                    <span className="flex items-center justify-between gap-1.5">
+                                      <b className="truncate font-mono text-xs text-stone-900" title={n.label}>
+                                        <i className="mr-1.5 inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: areaColor(colors, n.area) }} />
+                                        {n.label}
+                                      </b>
+                                      {n.area && <span className="shrink-0 text-[10px] text-stone-400">{n.area.replace(/^Mathlib\./, '')}</span>}
+                                    </span>
+                                    {n.tacticSuggestion && (
+                                      <span className="mt-1 inline-block truncate rounded bg-stone-100 px-1.5 py-0.5 font-mono text-[10px] text-stone-600" title={n.tacticSuggestion}>
+                                        {n.tacticSuggestion}
+                                      </span>
+                                    )}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-stone-400">—</p>
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -305,8 +491,7 @@ export default function App() {
           ) : (
             <Card>
               <CardContent className="pt-6">
-                <h2 className="font-serif text-xl font-bold">Pick a declaration to stand in its proof</h2>
-                <p className="mt-1 text-sm text-stone-500">The allocentric map opens here, the egocentric view below it, and the agent on the right works from wherever you stand.</p>
+                <h2 className="font-serif text-lg font-bold">Select a declaration above</h2>
               </CardContent>
             </Card>
           )}

@@ -76,17 +76,35 @@ function leanFiles(root: string, cap = 40): string[] {
       if (e.name.startsWith('.') || e.name === 'node_modules') continue;
       const p = path.join(dir, e.name);
       if (e.isDirectory()) walk(p, depth + 1);
-      else if (e.name.endsWith('.lean')) out.push(p);
+      else if (e.name.endsWith('.lean') && e.name !== 'lakefile.lean') out.push(p);
       if (out.length >= cap) return;
     }
   };
   walk(root, 0);
-  return out.sort();
+  // Rank files so self-contained theorem files (e.g. Tape.lean, 01Rewriting.lean)
+  // are traced before top-level import-only umbrella files or cross-module files.
+  const score = (p: string): number => {
+    try {
+      const src = fs.readFileSync(p, 'utf8');
+      const proofs = (src.match(/\b(theorem|lemma|example)\b[\s\S]*?:=\s*by\b/g) ?? []).length;
+      if (proofs === 0) return -1000;
+      const imports = src.split('\n').filter((l) => /^\s*(public\s+)?import\s+/.test(l));
+      const externalImports = imports.filter((l) => !/\b(Mathlib|Std|Init|Lean|Batteries)\b/.test(l)).length;
+      return proofs * 10 - externalImports * 200;
+    } catch {
+      return -1000;
+    }
+  };
+  return out.sort((a, b) => score(b) - score(a) || a.localeCompare(b));
 }
 
-/** Graspt's own tracer binary (built from the bundled lean/ project). */
+/** Graspt's own bundled Lean project and tracer binary. */
+export function bundledLeanDir(): string {
+  return path.join(packageRoot(), 'lean');
+}
+
 export function tracerBinaryPath(): string {
-  return path.join(packageRoot(), 'lean', '.lake', 'build', 'bin', 'graspt-trace');
+  return path.join(bundledLeanDir(), '.lake', 'build', 'bin', 'graspt-trace');
 }
 
 /**
@@ -137,16 +155,49 @@ export function parseTraceOutput(stdout: string): TraceResult {
   throw new Error('no JSON in tracer output');
 }
 
-async function runTrace(lakeRoot: string, relFile: string, timeoutMs = 180000): Promise<TraceResult> {
-  await ensureTracerBinary();
-  const { cmd, args } = traceInvocation(tracerBinaryPath(), relFile);
+function execTrace(cwd: string, fileArg: string, timeoutMs: number): Promise<TraceResult> {
+  const { cmd, args } = traceInvocation(tracerBinaryPath(), fileArg);
   return new Promise((resolve, reject) => {
     const env = { ...process.env, PATH: `${process.env.HOME}/.elan/bin:${process.env.PATH ?? ''}` };
-    execFile(cmd, args, { cwd: lakeRoot, env, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) return reject(new Error(`graspt-trace failed for ${relFile}: ${(stderr || err.message).slice(-400)}`));
-      try { resolve(parseTraceOutput(stdout)); } catch { reject(new Error(`graspt-trace returned non-JSON for ${relFile}: ${stdout.slice(0, 200)}`)); }
+    execFile(cmd, args, { cwd, env, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) return reject(new Error(`graspt-trace failed for ${fileArg}: ${(stderr || err.message).slice(-400)}`));
+      try { resolve(parseTraceOutput(stdout)); } catch { reject(new Error(`graspt-trace returned non-JSON for ${fileArg}: ${stdout.slice(0, 200)}`)); }
     });
   });
+}
+
+function sameToolchainAsBundled(lakeRoot: string): boolean {
+  try {
+    const a = fs.readFileSync(path.join(bundledLeanDir(), 'lean-toolchain'), 'utf8').trim();
+    const b = fs.readFileSync(path.join(lakeRoot, 'lean-toolchain'), 'utf8').trim();
+    return a === b;
+  } catch {
+    return false;
+  }
+}
+
+async function runTrace(lakeRoot: string, relFile: string, timeoutMs = 180000): Promise<TraceResult> {
+  await ensureTracerBinary();
+  const absFile = path.resolve(lakeRoot, relFile);
+  // If the target project pins a different Lean toolchain than Graspt's
+  // compiled tracer binary (v4.36.0-rc2), its .olean cache is version-locked
+  // and incompatible with our binary. Elaborate under Graspt's own cached
+  // Mathlib environment first, and normalize the reported file path.
+  const bundled = bundledLeanDir();
+  if (!sameToolchainAsBundled(lakeRoot) && fs.existsSync(path.join(bundled, 'lakefile.lean'))) {
+    try {
+      const r = await execTrace(bundled, absFile, timeoutMs);
+      if ((r.decls ?? []).length > 0) return { ...r, file: relFile };
+    } catch { /* fall back to target lakeRoot */ }
+  }
+  const r = await execTrace(lakeRoot, relFile, timeoutMs);
+  if ((r.decls ?? []).length === 0 && fs.existsSync(path.join(bundled, 'lakefile.lean')) && path.resolve(lakeRoot) !== path.resolve(bundled)) {
+    try {
+      const fallback = await execTrace(bundled, absFile, timeoutMs);
+      if ((fallback.decls ?? []).length > 0) return { ...fallback, file: relFile };
+    } catch { /* return original result */ }
+  }
+  return r;
 }
 
 /**
@@ -202,9 +253,10 @@ export async function ingestFolder(folder: string, storeDir: string, register: (
       // A browser-uploaded workspace arrives without `.lake` (build
       // artifacts are never uploaded), so its dependencies have no compiled
       // oleans to elaborate against. Fetch the dependency cache first when
-      // the project has none; projects whose cache cannot be fetched fall
-      // through to tracing, which surfaces the real error.
-      if (!fs.existsSync(path.join(lakeRoot, '.lake', 'packages'))) {
+      // the project shares the bundled Lean toolchain and has none; projects
+      // on a different toolchain elaborate against Graspt's bundled Mathlib
+      // cache instead of downloading a multi-GB incompatible toolchain.
+      if (sameToolchainAsBundled(lakeRoot) && !fs.existsSync(path.join(lakeRoot, '.lake', 'packages'))) {
         job.state = 'tracing';
         job.detail = `fetching dependency cache for ${path.basename(lakeRoot)} (lake exe cache get, large download)…`;
         await new Promise<void>((resolve) => {
