@@ -13,7 +13,8 @@ export interface Neighbour { nodeId: string; kind: string; label: string; area?:
 export interface NeighbourhoodData { centre: { goalId: string; target: string; pp: string; isFrontier: boolean }; neighbours: Neighbour[]; trail: string[] }
 export interface Candidate { tactic: string; rationale?: string }
 export interface ChatReply { answer: string; verified: boolean; reason?: string; agent: string; candidates: Candidate[] }
-export interface ApplyReply { ok: boolean; verified: boolean; explanation: string; diagnostics?: string[]; map?: ProofMapData }
+export interface TryStepLog { round: number; tactic: string; outcome: 'closed' | 'advanced' | 'rejected'; detail: string }
+export interface ApplyReply { ok: boolean; verified: boolean; kind?: 'closed' | 'advanced' | 'rejected'; tactic?: string; attempts?: TryStepLog[]; explanation: string; diagnostics?: string[]; map?: ProofMapData }
 
 export async function api<T = any>(path: string, opts?: RequestInit): Promise<T> {
   const r = await fetch(path, opts);

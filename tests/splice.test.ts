@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { cleanTactic, findSorryStep, judgeApplication, replaceRange } from '../apps/server/splice';
+import { cleanTactic, findSorryStep, judgeAdvancingApplication, judgeApplication, replaceRange, replaceRangeWithSorry, tacticRepairPrompt } from '../apps/server/splice';
 import type { TraceResult } from '../packages/core/types';
 
 const basicsSource = fs.readFileSync(path.join(__dirname, '..', '..', 'lean', 'Demo', 'Basics.lean'), 'utf8');
@@ -57,4 +57,35 @@ test('judgeApplication requires no errors and one fewer sorry', () => {
     decls: basicsTrace.decls.map((d) => d.name === 'two_dvd_mul_succ' ? { ...d, steps: d.steps.filter((s) => s.tactic !== 'sorry') } : d),
   };
   assert.equal(judgeApplication(twoDvd, cleanTrace, 'two_dvd_mul_succ').ok, true);
+});
+
+test('replaceRangeWithSorry and judgeAdvancingApplication accept verified advancing steps and tacticRepairPrompt includes rejected attempts', () => {
+  const step = findSorryStep(twoDvd)!;
+  const advSrc = replaceRangeWithSorry(basicsSource, step, 'rw [Nat.mul_comm]');
+  assert.match(advSrc, /rw \[Nat\.mul_comm\]\n  sorry/);
+
+  // Unchanged goal target -> rejected as no progress
+  assert.equal(judgeAdvancingApplication(twoDvd, basicsTrace, 'two_dvd_mul_succ', twoDvd.goals[0].target).ok, false);
+
+  // Advanced trace with a new subgoal and zero errors -> accepted as 'advanced'
+  const advancedTrace: TraceResult = {
+    ...basicsTrace,
+    messages: [],
+    decls: basicsTrace.decls.map((d) => d.name === 'two_dvd_mul_succ'
+      ? {
+          ...d,
+          goals: [...d.goals, { id: 'g_new', pp: 'n : ℕ\n⊢ 2 ∣ (n + 1) * n', target: '2 ∣ (n + 1) * n' }],
+          steps: d.steps.map((s) => s.tactic === 'sorry' ? { ...s, before: ['g_new'] } : s),
+        }
+      : d),
+  };
+  const advVerdict = judgeAdvancingApplication(twoDvd, advancedTrace, 'two_dvd_mul_succ', twoDvd.goals[0].target);
+  assert.equal(advVerdict.ok, true);
+  assert.equal(advVerdict.kind, 'advanced');
+
+  const prompt = tacticRepairPrompt('two_dvd_mul_succ', twoDvd.goals[0].pp, ['Nat.even_mul_succ_self'], [
+    { round: 1, tactic: 'omega', outcome: 'rejected', detail: 'omega could not prove the goal' },
+  ]);
+  assert.match(prompt, /omega could not prove the goal/);
+  assert.match(prompt, /Nat\.even_mul_succ_self/);
 });

@@ -5,9 +5,9 @@ import { atlasFor, loadAtlasCache, loadDemoRepo, packageRoot, proofMapFor, declT
 import { neighbourhood, areaColor, AREA_COLORS } from '../../packages/core/nav';
 import { resolvePositions, LayoutStore } from '../../packages/core/layout';
 import { answerChat, navigatorWalk } from './chat';
-import { metaStatus, setMetaApiKey, setModel, metaModel, extractApiKey, extractModel } from './meta';
+import { metaStatus, setMetaApiKey, setModel, metaModel, extractApiKey, extractModel, askMeta, hasMetaApiKey } from './meta';
 import { setupStatus, installLean, fetchMathlib, generateAtlas, demoReady, defaultStoreDir, getSetupJob } from './setup';
-import { cleanTactic, findSorryStep, judgeApplication, replaceRange, sorryCount } from './splice';
+import { cleanTactic, findSorryStep, judgeApplication, judgeAdvancingApplication, replaceRange, replaceRangeWithSorry, sorryCount, tacticRepairPrompt, MAX_REPAIR_ROUNDS, type TryStepLog } from './splice';
 import { traceClient } from './trace-client';
 import { getScratchJob, startScratchGeneration } from './generate';
 import { createUploadWorkspace, type UploadFile } from './workspace';
@@ -178,13 +178,14 @@ export function createServer(opts: ServerOptions) {
       }
       // POST /api/repos/:id/apply {decl, goal?, tactic} — the verified action:
       // splice the candidate over the frontier sorry in the session working
-      // copy, re-elaborate with the warm tracer, and only on Lean's acceptance
-      // replace the repo trace so the proof map redraws from new facts.
+      // copy, re-elaborate with the warm tracer, and loop with diagnostic-driven
+      // agent repair until something interesting happens (the frontier closes or
+      // advances to a new verified subgoal) or MAX_REPAIR_ROUNDS is reached.
       if (req.method === 'POST' && seg[3] === 'apply' && repo) {
-        const body = JSON.parse((await readBody(req)) || '{}') as { decl?: string; goal?: string; tactic?: string };
+        const body = JSON.parse((await readBody(req)) || '{}') as { decl?: string; goal?: string; tactic?: string; loop?: boolean };
         if (!body.decl || !body.tactic) { send(res, 400, { error: 'decl and tactic required' }); return; }
-        let tactic: string;
-        try { tactic = cleanTactic(body.tactic); } catch (e) { send(res, 400, { error: e instanceof Error ? e.message : String(e) }); return; }
+        let initialTactic: string;
+        try { initialTactic = cleanTactic(body.tactic); } catch (e) { send(res, 400, { error: e instanceof Error ? e.message : String(e) }); return; }
         const trace = repo.traces.find((t) => t.decls.some((d) => d.name === body.decl));
         const decl = trace?.decls.find((d) => d.name === body.decl);
         if (!trace || !decl) { send(res, 404, { error: `unknown declaration ${body.decl}` }); return; }
@@ -192,34 +193,105 @@ export function createServer(opts: ServerOptions) {
         if (!step) { send(res, 400, { error: `${body.decl} has no open frontier (sorry) to apply a tactic at in this demo slice` }); return; }
         const source = sourceFor(repo, trace.file);
         if (source === undefined) { send(res, 400, { error: `no Lean source available for ${trace.file} in this session` }); return; }
-        let nextSource: string;
-        try { nextSource = replaceRange(source, step, tactic); } catch (e) { send(res, 400, { error: e instanceof Error ? e.message : String(e) }); return; }
         const beforeSorries = sorryCount(decl);
+        const targetGoal = decl.goals.find((g) => step.before.includes(g.id)) ?? decl.goals[0];
+        const curMap = proofMapFor(repo, body.decl);
+        const landmarks = (curMap?.nodes ?? []).filter((n) => n.kind === 'landmark').map((n) => n.label);
+        const attempts: TryStepLog[] = [];
+        const triedSet = new Set<string>();
+        const queue: string[] = [initialTactic];
+        const maxRounds = body.loop === false ? 1 : MAX_REPAIR_ROUNDS;
+
         try {
-          const after = await traceClient().trace(trace.file, nextSource);
-          const verdict = judgeApplication(decl, after, body.decl);
-          if (!verdict.ok) {
-            send(res, 200, {
-              ok: false, verified: false, decl: body.decl, tactic,
-              explanation: `Lean rejected \`${tactic}\` at ${body.decl}. The map is unchanged — nothing was written. Diagnostics: ${verdict.diagnostics.join(' | ')}`,
-              diagnostics: verdict.diagnostics,
-            });
-            return;
+          for (let round = 1; round <= maxRounds; round++) {
+            while (queue.length > 0) {
+              const rawCand = queue.shift()!;
+              let cand: string;
+              try { cand = cleanTactic(rawCand); } catch { continue; }
+              if (triedSet.has(cand)) continue;
+              triedSet.add(cand);
+
+              // 1. Try closing the frontier outright (`sorry` -> `cand`)
+              const closeSource = replaceRange(source, step, cand);
+              const afterClose = await traceClient().trace(trace.file, closeSource);
+              const closeVerdict = judgeApplication(decl, afterClose, body.decl);
+              if (closeVerdict.ok) {
+                attempts.push({ round, tactic: cand, outcome: 'closed', detail: 'frontier closed' });
+                const idx = repo.traces.indexOf(trace);
+                if (idx >= 0) repo.traces[idx] = afterClose;
+                sourceOverrides.set(`${repo.id}:${trace.file}`, closeSource);
+                const afterDecl = afterClose.decls.find((d) => d.name === body.decl);
+                const map = proofMapFor(repo, body.decl);
+                const saved = layoutStore.loadLayout(layoutRootFor(repo.id), body.decl);
+                const positions = map ? resolvePositions(map.nodes, map.edges, { ...saved }) : undefined;
+                send(res, 200, {
+                  ok: true, verified: true, kind: 'closed', decl: body.decl, tactic: cand, attempts,
+                  explanation: `Lean accepted \`${cand}\` (attempt ${attempts.length}) and closed the frontier at ${body.decl}. Open frontiers went from ${beforeSorries} to ${sorryCount(afterDecl)}; the map has been redrawn.`,
+                  map: map ? { ...map, positions } : undefined,
+                });
+                return;
+              }
+
+              // 2. If the tactic didn't close the goal outright, check if it advances the frontier
+              // cleanly into a new subgoal (`sorry` -> `cand\n  sorry`).
+              const hasUnsolvedMsg = closeVerdict.diagnostics.some((d) => /unsolved goals|still open/i.test(d));
+              const hasHardSyntaxOrTypeErr = closeVerdict.diagnostics.some((d) => !/unsolved goals|still open/i.test(d));
+              if (hasUnsolvedMsg && !hasHardSyntaxOrTypeErr) {
+                const advSource = replaceRangeWithSorry(source, step, cand);
+                const afterAdv = await traceClient().trace(trace.file, advSource);
+                const advVerdict = judgeAdvancingApplication(decl, afterAdv, body.decl, targetGoal?.target);
+                if (advVerdict.ok) {
+                  attempts.push({ round, tactic: cand, outcome: 'advanced', detail: `advanced to new subgoal: ${advVerdict.unsolvedGoalPp ?? ''}` });
+                  const idx = repo.traces.indexOf(trace);
+                  if (idx >= 0) repo.traces[idx] = afterAdv;
+                  sourceOverrides.set(`${repo.id}:${trace.file}`, advSource);
+                  const map = proofMapFor(repo, body.decl);
+                  const saved = layoutStore.loadLayout(layoutRootFor(repo.id), body.decl);
+                  const positions = map ? resolvePositions(map.nodes, map.edges, { ...saved }) : undefined;
+                  send(res, 200, {
+                    ok: true, verified: true, kind: 'advanced', decl: body.decl, tactic: cand, attempts,
+                    explanation: `Lean accepted \`${cand}\` (attempt ${attempts.length}) as a verified step that advances the frontier to a new subgoal. The map has been extended in place.`,
+                    map: map ? { ...map, positions } : undefined,
+                  });
+                  return;
+                }
+              }
+
+              attempts.push({
+                round,
+                tactic: cand,
+                outcome: 'rejected',
+                detail: closeVerdict.diagnostics.join(' | ') || 'rejected by Lean',
+              });
+            }
+
+            // 3. Nothing in the queue worked on this round — ask the AI agent to repair/propose next tactics
+            // using Lean's exact diagnostics, unless we are out of rounds or have no API key.
+            if (round < maxRounds && hasMetaApiKey()) {
+              const prompt = tacticRepairPrompt(
+                body.decl,
+                targetGoal?.pp || targetGoal?.target || body.decl,
+                landmarks,
+                attempts,
+              );
+              const reply = await askMeta(prompt);
+              for (const c of reply.candidates) {
+                if (c.tactic && !triedSet.has(c.tactic.trim())) queue.push(c.tactic.trim());
+              }
+              if (queue.length === 0) break;
+            } else {
+              break;
+            }
           }
-          const idx = repo.traces.indexOf(trace);
-          if (idx >= 0) repo.traces[idx] = after;
-          sourceOverrides.set(`${repo.id}:${trace.file}`, nextSource);
-          const afterDecl = after.decls.find((d) => d.name === body.decl);
-          const map = proofMapFor(repo, body.decl);
-          const saved = layoutStore.loadLayout(layoutRootFor(repo.id), body.decl);
-          const positions = map ? resolvePositions(map.nodes, map.edges, { ...saved }) : undefined;
+
+          const last = attempts[attempts.length - 1];
           send(res, 200, {
-            ok: true, verified: true, decl: body.decl, tactic,
-            explanation: `Lean accepted \`${tactic}\` at ${body.decl}. Open frontiers in this declaration went from ${beforeSorries} to ${sorryCount(afterDecl)}; the map has been redrawn from the new elaboration, and every other place stayed where it was.`,
-            map: map ? { ...map, positions } : undefined,
+            ok: false, verified: false, kind: 'rejected', decl: body.decl, tactic: last?.tactic ?? initialTactic, attempts,
+            explanation: `Tried ${attempts.length} tactic(s) with Lean (${attempts.map((a) => `\`${a.tactic}\``).join(' → ')}); none closed or advanced the frontier. Last diagnostic: ${last?.detail ?? 'none'}`,
+            diagnostics: attempts.map((a) => `${a.tactic}: ${a.detail}`),
           });
         } catch (e) {
-          send(res, 200, { ok: false, verified: false, decl: body.decl, tactic, explanation: `The tracer could not check \`${tactic}\`: ${e instanceof Error ? e.message : String(e)}`, diagnostics: [e instanceof Error ? e.message : String(e)] });
+          send(res, 200, { ok: false, verified: false, decl: body.decl, tactic: initialTactic, attempts, explanation: `The tracer could not check \`${initialTactic}\`: ${e instanceof Error ? e.message : String(e)}`, diagnostics: [e instanceof Error ? e.message : String(e)] });
         }
         return;
       }

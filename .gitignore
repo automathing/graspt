@@ -53,3 +53,4 @@ Desktop.ini
 # Decision logs (sum_*.md) — local only, never published
 docs/decisions/
 **/sum_*.md
+buffer_text.md

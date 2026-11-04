@@ -5,7 +5,14 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
-interface Msg { role: 'human' | 'agent' | 'system' | 'verified'; text: string; candidates?: { tactic: string; rationale?: string }[]; badge?: string; ok?: boolean }
+interface Msg {
+  role: 'human' | 'agent' | 'system' | 'verified';
+  text: string;
+  candidates?: { tactic: string; rationale?: string }[];
+  attempts?: { round: number; tactic: string; outcome: 'closed' | 'advanced' | 'rejected'; detail: string }[];
+  badge?: string;
+  ok?: boolean;
+}
 
 export function ChatRail({ repoId, decl, goal, contextLabel, initialPrompt, onMapUpdate }: {
   repoId: string;
@@ -45,26 +52,24 @@ export function ChatRail({ repoId, decl, goal, contextLabel, initialPrompt, onMa
       return;
     }
     setBusy(true);
-    setMsgs((m) => [...m, { role: 'system', text: `Asking Lean to check \`${tactic}\` at ${decl}…` }]);
+    setMsgs((m) => [...m, { role: 'system', text: `Looping with Lean & Agent from \`${tactic}\` at ${decl} until the frontier closes or advances…` }]);
     try {
-      const r = await api<ApplyReply>(`/api/repos/${encodeURIComponent(repoId)}/apply`, post({ decl, goal, tactic }));
+      const r = await api<ApplyReply>(`/api/repos/${encodeURIComponent(repoId)}/apply`, post({ decl, goal, tactic, loop: true }));
       if (!r || (r as any).error) {
         setMsgs((m) => [...m, { role: 'system', text: `Could not apply: ${(r as any)?.error ?? 'empty response'}` }]);
         return;
       }
-      setMsgs((m) => [...m, { role: r.ok ? 'verified' : 'system', text: r.explanation }]);
+      setMsgs((m) => [...m, { role: r.ok ? 'verified' : 'system', text: r.explanation, attempts: r.attempts }]);
       if (r.ok && r.map) {
         onMapUpdate(r.map);
-        setMsgs((m) => [...m, { role: 'system', text: 'The map has been redrawn from Lean’s new elaboration. Places you already know stayed put; the frontier you stood on has moved.' }]);
       }
     } catch (e) {
       setMsgs((m) => [...m, { role: 'system', text: `Could not reach the server (${e instanceof Error ? e.message : String(e)}).` }]);
     } finally { setBusy(false); }
   }
 
-  async function send(e: React.FormEvent) {
-    e.preventDefault();
-    const q = input.trim();
+  async function askQuestion(rawQuestion: string) {
+    const q = rawQuestion.trim();
     if (!q || busy) return;
     setInput('');
     setBusy(true);
@@ -84,12 +89,17 @@ export function ChatRail({ repoId, decl, goal, contextLabel, initialPrompt, onMa
           badge: r.verified ? '✓ citations verified' : `unverified${r.reason ? ` — ${r.reason}` : ''} · via ${r.agent || 'none'}`,
           ok: r.verified,
         });
-        if ((r.candidates ?? []).length) out.push({ role: 'system', text: 'Suggestions are unverified. Pressing Try sends one tactic to Lean; only if Lean accepts it does the map change.' });
+        if ((r.candidates ?? []).length) out.push({ role: 'system', text: 'Suggestions are unverified. Pressing Try loops with Lean until a tactic closes or advances the frontier.' });
         return out;
       });
     } catch (err) {
       setMsgs((m) => [...m.slice(0, -1), { role: 'system', text: `Could not reach the server (${err instanceof Error ? err.message : String(err)}).` }]);
     } finally { setBusy(false); }
+  }
+
+  async function send(e: React.FormEvent) {
+    e.preventDefault();
+    await askQuestion(input);
   }
 
   async function saveKey() {
@@ -146,6 +156,19 @@ export function ChatRail({ repoId, decl, goal, contextLabel, initialPrompt, onMa
           )}>
             {m.role === 'human' && <b>You: </b>}{m.text}
             {m.badge && <div className="mt-1"><Badge variant={m.ok ? 'success' : 'warning'}>{m.badge}</Badge></div>}
+            {m.attempts && m.attempts.length > 0 && (
+              <div className="mt-2 space-y-1 border-t border-stone-200/80 pt-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-stone-500">Lean Check Trail ({m.attempts.length} attempt{m.attempts.length === 1 ? '' : 's'})</p>
+                {m.attempts.map((a, idx) => (
+                  <div key={idx} className="flex items-start justify-between gap-2 rounded bg-white/80 px-2 py-1 font-mono text-[11px]">
+                    <span className="break-all text-stone-800">#{idx + 1} <b>{a.tactic}</b></span>
+                    <Badge variant={a.outcome === 'rejected' ? 'warning' : 'success'} className="shrink-0 px-1.5 py-0 text-[9px]">
+                      {a.outcome === 'closed' ? '✓ closed' : a.outcome === 'advanced' ? '→ advanced' : '✗ rejected'}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            )}
             {m.candidates?.map((c) => (
               <div key={c.tactic} className="mt-2 rounded-md border border-stone-300 bg-white p-2">
                 <code className="block break-words rounded bg-forest-deep px-2 py-1.5 font-mono text-[13px] font-semibold text-teal-50">{c.tactic}</code>
@@ -156,6 +179,19 @@ export function ChatRail({ repoId, decl, goal, contextLabel, initialPrompt, onMa
               </div>
             ))}
           </div>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap gap-1">
+        {(['Explain this place', 'Suggest next tactic', 'What landmarks combine here?'] as const).map((q) => (
+          <button
+            key={q}
+            type="button"
+            disabled={busy}
+            onClick={() => void askQuestion(q)}
+            className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-0.5 text-[11px] font-medium text-stone-700 transition-colors hover:border-teal-700 hover:bg-teal-50 disabled:opacity-50">
+            {q}
+          </button>
         ))}
       </div>
 

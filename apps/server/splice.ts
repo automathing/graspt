@@ -48,7 +48,24 @@ export function sorryCount(decl: DeclTrace | undefined): number {
   return decl ? decl.steps.filter((s) => s.tactic.trim() === 'sorry').length : 0;
 }
 
-export interface Acceptance { ok: boolean; diagnostics: string[] }
+export const MAX_REPAIR_ROUNDS = 4;
+
+export interface Acceptance {
+  ok: boolean;
+  kind?: 'closed' | 'advanced' | 'rejected';
+  diagnostics: string[];
+  unsolvedGoalPp?: string;
+}
+
+/**
+ * Replace a single-line sorry with `tactic` followed by `sorry` on a new
+ * indented line so an advancing tactic (e.g. `intro`, `rw`, `apply`) can
+ * Elaborate cleanly and leave its new subgoals as open frontiers on the map.
+ */
+export function replaceRangeWithSorry(source: string, range: SourceRange, tactic: string): string {
+  const indent = ' '.repeat(Math.max(0, range.startCol));
+  return replaceRange(source, range, `${tactic}\n${indent}sorry`);
+}
 
 /**
  * Lean disposes: accept only when the re-elaborated trace has no error
@@ -65,5 +82,61 @@ export function judgeApplication(before: DeclTrace, after: TraceResult, declName
   else if (sorryCount(afterDecl) >= sorryCount(before)) {
     diagnostics.push('the frontier is still open (sorry remains) — the tactic did not close this goal');
   }
-  return { ok: diagnostics.length === 0, diagnostics };
+  const ok = diagnostics.length === 0;
+  return { ok, kind: ok ? 'closed' : 'rejected', diagnostics };
+}
+
+/**
+ * Check whether an advancing tactic (spliced as `tactic\n  sorry`) genuinely
+ * transformed the frontier into a *new* subgoal (canonical Γ ⊢ T changed)
+ * with zero Lean error diagnostics.
+ */
+export function judgeAdvancingApplication(before: DeclTrace, after: TraceResult, declName: string, beforeGoalTarget?: string): Acceptance {
+  const diagnostics: string[] = [];
+  if (after.error) diagnostics.push(after.error);
+  for (const m of after.messages ?? []) {
+    if (m.severity === 'error') diagnostics.push(`line ${m.line}: ${m.text}`);
+  }
+  const afterDecl = (after.decls ?? []).find((d) => d.name === declName);
+  if (!afterDecl) {
+    diagnostics.push(`declaration ${declName} no longer elaborates`);
+    return { ok: false, kind: 'rejected', diagnostics };
+  }
+  if (diagnostics.length > 0) return { ok: false, kind: 'rejected', diagnostics };
+  const afterSorry = findSorryStep(afterDecl);
+  const afterGoal = afterSorry ? afterDecl.goals.find((g) => afterSorry.before.includes(g.id)) : undefined;
+  const changed = (afterDecl.goals.length > before.goals.length) || (afterGoal && beforeGoalTarget && afterGoal.target.trim() !== beforeGoalTarget.trim());
+  if (!changed) {
+    return { ok: false, kind: 'rejected', diagnostics: ['tactic made no progress on the goal state'] };
+  }
+  return { ok: true, kind: 'advanced', diagnostics: [], unsolvedGoalPp: afterGoal?.pp ?? afterGoal?.target };
+}
+
+export interface TryStepLog {
+  round: number;
+  tactic: string;
+  outcome: 'closed' | 'advanced' | 'rejected';
+  detail: string;
+}
+
+export function tacticRepairPrompt(
+  declName: string,
+  goalPp: string,
+  landmarks: string[],
+  tried: TryStepLog[],
+): string {
+  return [
+    `We are trying to close or advance an open frontier in Lean 4 declaration \`${declName}\`.`,
+    'Current goal (Γ ⊢ T):',
+    '```',
+    goalPp,
+    '```',
+    landmarks.length ? `Available nearby landmarks: ${landmarks.join(', ')}` : '',
+    'Previous tactic attempts rejected by the Lean kernel:',
+    ...tried.map((t) => `  - Round ${t.round}: \`${t.tactic}\` → ${t.detail}`),
+    '',
+    'Propose 1 to 3 DIFFERENT single-line Lean 4 tactics that either close this goal outright OR make a meaningful step (e.g. `exact ...`, `apply ...`, `rw [...]`, `omega`, `ring`, `simp [...]`, `linarith`, ` decide`).',
+    'Rules: single-line tactics only; never use sorry, axiom, native_decide, or unsafe.',
+    'Reply ONLY with a JSON array of objects: [{"tactic": "...", "rationale": "..."}]',
+  ].filter(Boolean).join('\n');
 }

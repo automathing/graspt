@@ -66,7 +66,7 @@ An expert's obvious single step is a learner's ten-step chasm. So the map adjust
 1. **Open the demo map.** Twelve pre-indexed Lean proofs — topology, algebra, number theory, induction, set theory — with 7 open frontiers.
 2. **Click a frontier**, e.g. `two_dvd_mul_succ`: *2 divides n·(n+1), for every n* — stated, not yet proved.
 3. **Ask the agent.** It answers in three parts: *Where you are* (in plain words), *What combines here* (the nearby landmarks and why), *My suggestion* (a tactic, marked unverified).
-4. **Press “Try this — Lean checks it.”** The tactic is spliced into a working copy and elaborated. If Lean accepts it, the frontier closes and **the map redraws itself around you** — every other place exactly where you left it.
+4. **Press “Try this — Lean checks it.”** The tactic is spliced into a session working copy and elaborated; if Lean rejects it, the agent and Lean loop with diagnostic-driven repair until a tactic either **closes** or **advances** the frontier — and **the map redraws itself around you** with every other place where you left it.
 5. **Or start from scratch:** state a theorem in plain words, and watch a generated, Lean-verified proof appear as a map.
 
 ## Four ways in, one session
@@ -74,7 +74,7 @@ An expert's obvious single step is a learner's ten-step chasm. So the map adjust
 | Entry | What happens |
 | :--- | :--- |
 | **From scratch** | Plain-language intent → agent drafts whole-file Lean → tracer elaborates, diagnostics drive repair → only a verified proof becomes a map |
-| **Local Lean folder** | A project on your machine, traced read-only into the map |
+| **Local Lean folder** | Drag-and-drop or pick a folder in the browser; Lean sources are uploaded into a confined server workspace and traced read-only |
 | **Remote repository** | Cloned into server scratch space, then traced the same way |
 | **Precomputed demos** | The built-in traced proofs — instant open, no Lean run |
 
@@ -117,7 +117,7 @@ Chat calls Meta AI directly via the Vercel AI SDK (`muse-wonder-1.0` by default)
 
 A demo that hides its limits will be found out; these are ours:
 
-- The verified apply action works at **open frontiers** with single-line tactics. Arbitrary mid-proof editing and multi-tactic autonomous repair are designed, not built.
+- The verified apply action (`Try`) operates at **open frontiers** (`sorry`) with single-line tactics, looping with diagnostic-driven repair until a candidate either closes the frontier or advances it to a new verified subgoal. Arbitrary mid-proof refactoring of already-closed steps is not yet built.
 - Scratch generation is whole-file drafting with a bounded repair loop, not a stepwise prover. Lean verifies the *proof*; whether the formalised statement matches your English is yours to judge on the map.
 - One tracer process serves one file at a time (a fresh file pays a ~3s cold trace, then ~0.1s warm checks).
 - What is *proved* here is the loop: point → explain → propose → kernel-verifies → map moves. The wider claims — that spatial navigation becomes transparent faster than syntax fluency — are the experiment this demo invites you to run.
