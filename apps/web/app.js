@@ -131,6 +131,7 @@ function drawMap() {
 
 async function selectGoal(nodeId) {
   currentGoal = nodeId.replace(/^g:/, '');
+  setChatContext(`${currentDecl} · goal ${currentGoal} — agent works from here`);
   document.querySelectorAll('#map g.node').forEach((g) => g.classList.toggle('selected', g.dataset.id === nodeId));
   const nb = await api(`/api/repos/${encodeURIComponent(repoId)}/neighbourhood/${encodeURIComponent(currentDecl)}?goal=${encodeURIComponent(currentGoal)}`);
   if (!nb || nb.error) { $('#ego-centre').textContent = 'No neighbourhood.'; return; }
@@ -157,6 +158,35 @@ function showLandmark(id) {
   $('#ego-centre').textContent = n ? `${n.label}\nArea: ${n.area || 'Core'}\nUses: ${n.uses ?? 0}\n\nSuggested tactic is unverified until Lean checks it: apply ${n.label}` : id;
   $('#ego-neighbours').innerHTML = '';
 }
+
+function setChatContext(text) { const el = $('#chat-context'); if (el) el.textContent = `Context: ${text}`; }
+
+document.querySelectorAll('.prompt-chip').forEach((chip) => chip.addEventListener('click', () => { $('#scratch-input').value = chip.dataset.prompt; $('#scratch-input').focus(); }));
+$('#start-scratch').addEventListener('click', async () => {
+  const prompt = $('#scratch-input').value.trim();
+  $('#job-status').textContent = 'starting scratch session…';
+  try {
+    const repo = await api('/api/repos/scratch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) });
+    if (!repo || repo.error) { $('#job-status').textContent = `scratch failed: ${(repo && repo.error) || 'empty response'}`; return; }
+    repoId = repo.id;
+    await loadRepos();
+    $('#repo-select').value = repoId;
+    await loadAtlas();
+    $('#job-status').textContent = 'scratch session started — direct the agent in the chat on the right.';
+    $('#session-status').textContent = 'Scratch session · no declarations yet';
+    setChatContext(prompt ? `scratch — “${prompt.slice(0, 80)}”` : 'scratch session');
+    const input = $('#chat-input');
+    input.value = prompt ? `Prove this in Lean 4: ${prompt} Give me a first draft tactic proof; mark anything Lean has not checked as unverified.` : '';
+    input.focus();
+  } catch (err) { $('#job-status').textContent = `scratch failed: ${err.message || err}`; }
+});
+$('#open-demo').addEventListener('click', async () => {
+  repoId = $('#repo-select').value || 'demo';
+  $('#session-status').textContent = 'On the map · agent writes, Lean verifies';
+  setChatContext('atlas');
+  await loadAtlas();
+  $('#atlas-view').scrollIntoView({ behavior: 'smooth' });
+});
 
 $('#back-atlas').addEventListener('click', () => { $('#proof-view').hidden = true; $('#atlas-view').hidden = false; });
 $('#brand-home').addEventListener('click', (e) => { e.preventDefault(); $('#proof-view').hidden = true; $('#atlas-view').hidden = false; window.scrollTo({ top: 0, behavior: 'smooth' }); });

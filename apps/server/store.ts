@@ -1,15 +1,30 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import type { Atlas, ProofMap, TraceResult } from '../../packages/core/types';
+import type { Atlas, Importance, ProofMap, TraceResult } from '../../packages/core/types';
 import { buildProofMap } from '../../packages/core/model';
 import { areaColor } from '../../packages/core/nav';
+import { loadAtlasFiles } from './atlas-cache';
+
+/** Global Mathlib atlas loaded once at boot (built offline by `graspt setup`). */
+let globalAtlas: Atlas | undefined;
+let globalImportance: Importance | undefined;
+
+export function loadAtlasCache(storeDir: string): boolean {
+  const files = loadAtlasFiles(storeDir);
+  if (!files) return false;
+  globalAtlas = files.atlas;
+  globalImportance = files.importance;
+  return true;
+}
+
+export function hasGlobalAtlas(): boolean { return !!globalAtlas; }
 
 export interface Repo {
   id: string;
   name: string;
   root: string;
   traces: TraceResult[];
-  source: 'demo' | 'folder';
+  source: 'demo' | 'folder' | 'scratch';
 }
 
 /** Walk up from the compiled file until the `graspt` package.json — layout-proof. */
@@ -36,8 +51,8 @@ export function loadDemoRepo(): Repo {
   return { id: 'demo', name: 'Pre-indexed demo (Lean Demo)', root: demoDir, traces, source: 'demo' };
 }
 
-export function repoFromTraces(id: string, name: string, root: string, traces: TraceResult[]): Repo {
-  return { id, name, root, traces, source: 'folder' };
+export function repoFromTraces(id: string, name: string, root: string, traces: TraceResult[], source: Repo['source'] = 'folder'): Repo {
+  return { id, name, root, traces, source };
 }
 
 export function allDeclNames(repo: Repo): string[] {
@@ -49,7 +64,7 @@ export function proofMapFor(repo: Repo, declName: string): ProofMap | undefined 
     const decl = t.decls.find((d) => d.name === declName);
     if (!decl) continue;
     const localNames = new Set(repo.traces.flatMap((x) => x.decls.map((d) => d.name)));
-    return buildProofMap(decl, { landmarkThreshold: 10, localNames });
+    return buildProofMap(decl, { landmarkThreshold: 10, localNames, importance: globalImportance ?? null });
   }
   return undefined;
 }

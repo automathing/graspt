@@ -8,14 +8,20 @@ Graspt is for people with mathematical intuition who are blocked by transcoding 
 
 ## Run it
 
+The supported reproduction path is a **git clone** (the npm tarball excludes `lean/`, so it is demo-grade only — the fixtures open, but it cannot rebuild the atlas or tracer):
+
 ```bash
-npm install
-npx graspt setup             # provision Lean (elan + toolchain) and the Mathlib cache
+git clone <this-repo> && cd graspt
+npm ci
+npx graspt setup             # one long job: Lean → Mathlib cache → global Atlas
+npx graspt demo-ready        # offline readiness check (exit 1 names any missing stage)
 npm start -- ./lean          # or: npx graspt ./lean, or npx graspt https://github.com/owner/repo.git
 # → Open this URL in your browser: http://127.0.0.1:4173/
 ```
 
-Setup is explicit (Lean + Mathlib are gigabytes, so nothing downloads silently at install time): `graspt setup` installs the elan Lean toolchain `leanprover/lean4:v4.36.0-rc2` and the Mathlib cache of the bundled `lean/` project — skipping whatever is already present. Chat needs no installation: it calls the Meta AI API via the Vercel AI SDK (`ai` + `@ai-sdk/openai` pointed at `https://api.meta.ai/v1`, Responses API, model `muse-wonder-1.0` by default, selectable next to the chatbox). Paste your Meta API key (`MODEL_API_KEY`) next to the chatbox; it is stored on the server only (`~/.graspt/`, mode `0600`) and never sent back to the browser.
+Setup is explicit and staged (Lean + Mathlib are gigabytes, so nothing downloads silently at install time). Run `graspt setup` as **one long job without a short shell timeout**: the Atlas stage imports all of Mathlib and can exceed 25 minutes on 4 cores, and an interrupted stage restarts that stage. Completed stages skip themselves — the atlas is fingerprinted (SHA-256 over toolchain + Mathlib revision + the atlas generator's source and parameters) and validated by parsing, so a stale or corrupt cache is regenerated, never trusted. `graspt doctor` prints the same status as JSON. State lives in a persistent store (`GRASPT_STORE`, default `~/.graspt/store`), never `/tmp` by default; in a container, persist `~/.graspt` (API key + store) as a volume or setup vanishes with the container, and start with `--no-open` plus port forwarding. A sandbox that only needs to verify the product can skip setup entirely: typecheck + tests + the fixture demo exercise it with no Lean, no downloads, and no API key.
+
+Setup stages: the elan Lean toolchain `leanprover/lean4:v4.36.0-rc2`, the Mathlib cache of the bundled `lean/` project, then the global Mathlib atlas (`graspt-atlas`) — areas, landmarks, and the importance table the proof maps rank by. Chat needs no installation: it calls the Meta AI API via the Vercel AI SDK (`ai` + `@ai-sdk/openai` pointed at `https://api.meta.ai/v1`, Responses API, model `muse-wonder-1.0` by default, selectable next to the chatbox). Paste your Meta API key (`MODEL_API_KEY`) next to the chatbox; it is stored on the server only (`~/.graspt/`, mode `0600`) and never sent back to the browser.
 
 Opening sources: a local folder, or a git URL — remotes are cloned into `/tmp/graspt-clones/` (server scratch space) and ingested from there. Note the browser itself cannot see `/tmp` (or any filesystem); the Node server running on the same machine reads folders/clones and serves only the map API, which is why `/tmp/...` paths work in the UI.
 
@@ -44,7 +50,8 @@ Pre-indexed demo traces ship in `fixtures/demo/`, so the atlas opens instantly w
 ## Verify
 
 ```bash
-npm run typecheck && npm test
+npm run typecheck && npm test   # repo CI gates
+npx graspt demo-ready           # on a set-up machine: all provisioning stages present
 ```
 
 ## Demo note (hackathon)

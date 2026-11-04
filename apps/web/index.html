@@ -3,55 +3,75 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Graspt — explore Lean 4 proofs as a navigable map of goals and landmarks.">
+<meta name="description" content="Graspt — navigate Lean 4 proofs on a map, direct an AI agent from where you stand.">
 <title>Graspt — Proof Atlas</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <header class="app-header">
-  <a class="brand" href="#" id="brand-home" aria-label="Graspt atlas home">
+  <a class="brand" href="#" id="brand-home" aria-label="Graspt home">
     <span class="brand-mark" aria-hidden="true">G</span>
     <span class="brand-copy"><strong>Graspt</strong><small>Proof Atlas</small></span>
   </a>
   <div class="header-status" aria-label="Application status">
     <span class="status-dot" aria-hidden="true"></span>
-    <span>Read-only explorer</span>
+    <span id="session-status">One map · agent writes, Lean verifies</span>
   </div>
-  <label class="repo-picker">Repository
-    <select id="repo-select" aria-label="Repository"></select>
-  </label>
 </header>
 
-<section class="source-panel" aria-labelledby="source-title">
-  <div class="source-intro">
-    <h2 id="source-title">Open a proof source</h2>
-    <p>Browse a local Lean project or clone a remote repository into temporary storage.</p>
+<section class="entry-panel" aria-labelledby="entry-title">
+  <div class="entry-head">
+    <h2 id="entry-title">Start navigating</h2>
+    <p>Four ways in — every session converges to the same map, egocentric view, and agent chat.</p>
   </div>
-  <div class="source-actions">
-    <div class="source-group">
-      <label for="folder-input">Local folder</label>
-      <div class="input-row">
-        <input id="folder-input" type="text" placeholder="/path/to/lean-project" autocomplete="off">
-        <button id="open-folder" type="button">Open folder</button>
+  <div class="entry-grid">
+    <article class="entry-card" data-entry="scratch">
+      <span class="entry-num" aria-hidden="true">1</span>
+      <h3>From scratch</h3>
+      <p>State a theorem in plain words. The agent drafts Lean; nothing is proved until Lean checks it.</p>
+      <input id="scratch-input" type="text" placeholder="Prove that n * (n + 1) is always even…" autocomplete="off" aria-label="Theorem to prove from scratch">
+      <div class="chip-row" aria-label="Starter theorems">
+        <button type="button" class="prompt-chip" data-prompt="Prove that for every natural number n, n * (n + 1) is even.">n·(n+1) is even</button>
+        <button type="button" class="prompt-chip" data-prompt="Prove that the sum of the first n odd numbers equals n^2.">Sum of odds = n²</button>
+        <button type="button" class="prompt-chip" data-prompt="Prove that reversing a list twice gives back the list.">reverse ∘ reverse = id</button>
       </div>
-    </div>
-    <div class="source-divider" aria-hidden="true">or</div>
-    <div class="source-group source-group-wide">
-      <label for="clone-input">Git repository</label>
-      <div class="input-row">
-        <input id="clone-input" type="url" placeholder="https://github.com/owner/lean-repo.git" autocomplete="off">
-        <button id="clone-repo" type="button">Clone to /tmp</button>
-      </div>
-    </div>
+      <button id="start-scratch" type="button">Start scratch session</button>
+    </article>
+
+    <article class="entry-card" data-entry="folder">
+      <span class="entry-num" aria-hidden="true">2</span>
+      <h3>Local Lean folder</h3>
+      <p>Open a Lean project on this machine. It is read, never written, until you fire a commit.</p>
+      <input id="folder-input" type="text" placeholder="/path/to/lean-project" autocomplete="off" aria-label="Local Lean folder path">
+      <button id="open-folder" type="button">Open folder</button>
+    </article>
+
+    <article class="entry-card" data-entry="remote">
+      <span class="entry-num" aria-hidden="true">3</span>
+      <h3>Remote repository</h3>
+      <p>Clone a git repository into server scratch space and navigate its proofs.</p>
+      <input id="clone-input" type="url" placeholder="https://github.com/owner/lean-repo.git" autocomplete="off" aria-label="Git repository URL">
+      <button id="clone-repo" type="button">Clone repository</button>
+    </article>
+
+    <article class="entry-card" data-entry="demo">
+      <span class="entry-num" aria-hidden="true">4</span>
+      <h3>Precomputed demos</h3>
+      <p>Built-in Lean demos, pre-indexed so the map opens instantly — no Lean run needed.</p>
+      <label class="sr-only" for="repo-select">Opened repositories and demos</label>
+      <select id="repo-select" aria-label="Repository"></select>
+      <button id="open-demo" type="button">Open on the map</button>
+    </article>
   </div>
   <p id="job-status" class="job-status" role="status" aria-live="polite"></p>
 </section>
 
+<div class="workspace">
 <main>
   <section id="atlas-view" aria-labelledby="atlas-title">
     <div class="page-head">
       <div>
-        <p class="section-label">Known territory</p>
+        <p class="section-label">Allocentric map — known territory</p>
         <h1 id="atlas-title">Explore the territory</h1>
         <p id="atlas-stats" class="page-subtitle"></p>
       </div>
@@ -102,7 +122,7 @@
     <div class="proof-toolbar">
       <button id="back-atlas" type="button" class="button-secondary">← Back to atlas</button>
       <div class="proof-heading">
-        <p class="section-label">Proof map</p>
+        <p class="section-label">Allocentric proof map</p>
         <h1 id="proof-title"></h1>
         <span id="proof-stats"></span>
       </div>
@@ -125,13 +145,15 @@
           <span><i class="legend-shape known"></i>Grounded</span>
         </div>
         <div class="map-wrap"><svg id="map" role="group" aria-label="Proof map. Use Tab to move between nodes and Enter to select one."></svg></div>
-        <p class="map-hint">Pan by scrolling inside the map. Tab through nodes, press Enter to inspect one.</p>
+        <p class="map-hint">Scroll to pan. Tab through nodes, press Enter to stand on one — the egocentric view below follows, and the agent’s context moves with you.</p>
       </section>
 
       <aside id="ego-panel" aria-labelledby="ego-title">
-        <p class="section-label">Egocentric view</p>
-        <h2 id="ego-title">Where am I?</h2>
-        <pre id="ego-centre">Click a goal node.</pre>
+        <div class="ego-centre-block">
+          <p class="section-label">Egocentric view — where am I?</p>
+          <h2 id="ego-title" class="sr-only">Where am I?</h2>
+          <pre id="ego-centre">Click a goal node.</pre>
+        </div>
         <div class="trail-block">
           <h3>Trail from root</h3>
           <p id="ego-trail">At the root goal.</p>
@@ -145,9 +167,20 @@
   </section>
 </main>
 
-<footer id="chatbar">
+<aside id="chatbar" aria-label="Agent chat">
+  <div class="chat-head">
+    <strong>Agent</strong>
+    <span id="agent-status">Chat: …</span>
+  </div>
+  <p id="chat-context" class="chat-context">Context: atlas. Stand on a goal and the agent works from there.</p>
+  <div id="chat-log" aria-live="polite"><p class="chat-placeholder">Ask about the current proof, a nearby landmark, or what remains open. From scratch, tell the agent what to prove.</p></div>
+  <form id="chat-form">
+    <label class="sr-only" for="chat-input">Direct the agent</label>
+    <input id="chat-input" type="text" placeholder="Direct the agent…" autocomplete="off">
+    <button type="submit">Send</button>
+  </form>
   <details class="agent-settings" id="agent-settings">
-    <summary><span id="agent-status">Chat: …</span><span class="settings-action">Connection settings</span></summary>
+    <summary><span>API key &amp; model</span><span class="settings-action">Connection</span></summary>
     <div id="agent-bar">
       <span id="key-form">
         <input id="api-key-input" type="password" placeholder="Meta API key / MODEL_API_KEY" autocomplete="off" aria-label="Meta API key">
@@ -160,13 +193,8 @@
     </div>
     <p class="chat-note">Meta AI answers directly through api.meta.ai. Citations are checked against the graph; tactic suggestions remain unverified until Lean checks them. Keys stay on the server and are never returned to the browser.</p>
   </details>
-  <div id="chat-log" aria-live="polite"><p class="chat-placeholder">Ask about the current proof, a nearby landmark, or what remains open.</p></div>
-  <form id="chat-form">
-    <label class="sr-only" for="chat-input">Ask Meta AI about this proof</label>
-    <input id="chat-input" type="text" placeholder="Ask about this proof…" autocomplete="off">
-    <button type="submit">Ask</button>
-  </form>
-</footer>
+</aside>
+</div>
 <script src="/app.js"></script>
 </body>
 </html>

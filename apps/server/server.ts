@@ -1,13 +1,12 @@
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
-import { atlasFor, loadDemoRepo, packageRoot, proofMapFor, declTrace, type Repo } from './store';
+import { atlasFor, loadAtlasCache, loadDemoRepo, packageRoot, proofMapFor, declTrace, repoFromTraces, type Repo } from './store';
 import { neighbourhood, areaColor, AREA_COLORS } from '../../packages/core/nav';
 import { resolvePositions, LayoutStore } from '../../packages/core/layout';
 import { answerChat, navigatorWalk } from './chat';
 import { metaStatus, setMetaApiKey, setModel, metaModel, extractApiKey, extractModel } from './meta';
-import { setupStatus, installLean, fetchMathlib, getSetupJob } from './setup';
+import { setupStatus, installLean, fetchMathlib, generateAtlas, demoReady, defaultStoreDir, getSetupJob } from './setup';
 import { cloneAndIngest } from './ingest';
 import { ingestFolder, getJob, listJobs } from './ingest';
 
@@ -19,7 +18,8 @@ export function createServer(opts: ServerOptions) {
   const repos = new Map<string, Repo>();
   const demo = loadDemoRepo();
   repos.set(demo.id, demo);
-  const storeDir = opts.storeDir ?? path.join(os.tmpdir(), 'graspt-store');
+  const storeDir = opts.storeDir ?? defaultStoreDir();
+  loadAtlasCache(storeDir);
   const layoutStore = new LayoutStore();
   // Layout lives in the server store, never in an opened repo — and is
   // namespaced per repo so two repos sharing a decl name never share a map.
@@ -78,6 +78,15 @@ export function createServer(opts: ServerOptions) {
         if (!body.path) { send(res, 400, { error: 'path required' }); return; }
         const job = await ingestFolder(body.path, storeDir, (r) => repos.set(r.id, r));
         send(res, 202, job); return;
+      }
+      // POST /api/repos/scratch {prompt?} — a blank session repo: no declarations yet;
+      // the human's intent lives in chat until the agent drafts Lean for it.
+      if (req.method === 'POST' && seg.length === 3 && seg[1] === 'repos' && seg[2] === 'scratch') {
+        const body = JSON.parse((await readBody(req)) || '{}') as { prompt?: string };
+        const repo = repoFromTraces(`scratch-${Date.now()}`, body.prompt?.trim() ? `Scratch: ${body.prompt.trim().slice(0, 60)}` : 'Scratch session', storeDir, [], 'scratch');
+        repos.set(repo.id, repo);
+        send(res, 201, { id: repo.id, name: repo.name, source: repo.source, decls: 0 });
+        return;
       }
       // POST /api/repos/clone {url} — clone into /tmp/graspt-clones, then ingest (before the :id guard)
       if (req.method === 'POST' && seg.length === 3 && seg[1] === 'repos' && seg[2] === 'clone') {
@@ -138,11 +147,13 @@ export function createServer(opts: ServerOptions) {
       }
       // GET /api/agent/status
       if (req.method === 'GET' && seg[1] === 'agent' && seg[2] === 'status') { send(res, 200, metaStatus()); return; }
-      // Setup provisioning: GET status, POST install-pi|install-lean|fetch-mathlib, GET job
-      if (req.method === 'GET' && seg[1] === 'setup' && seg[2] === 'status') { send(res, 200, await setupStatus()); return; }
+      // Setup provisioning: GET status, POST install-lean|fetch-mathlib|generate-atlas, GET job
+      if (req.method === 'GET' && seg[1] === 'setup' && seg[2] === 'status') { send(res, 200, await setupStatus(storeDir)); return; }
+      if (req.method === 'GET' && seg[1] === 'setup' && seg[2] === 'demo-ready') { send(res, 200, await demoReady(storeDir)); return; }
       if (req.method === 'GET' && seg[1] === 'setup' && seg[2] === 'job') { const j = getSetupJob(seg[3] ?? ''); send(res, j ? 200 : 404, j ?? { error: 'unknown setup job' }); return; }
       if (req.method === 'POST' && seg[1] === 'setup') {
         if (seg[2] === 'install-lean') { send(res, 202, installLean()); return; }
+        if (seg[2] === 'generate-atlas') { send(res, 202, generateAtlas(storeDir)); return; }
         if (seg[2] === 'fetch-mathlib') { const b = JSON.parse((await readBody(req)) || '{}') as { project?: string }; send(res, 202, fetchMathlib(b.project)); return; }
       }
       // POST /api/agent/key {apiKey} — stored server-side only, never echoed back
