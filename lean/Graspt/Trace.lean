@@ -216,11 +216,20 @@ structure HeaderCache where
 def severityStr : MessageSeverity → String
   | .error => "error" | .warning => "warning" | .information => "info"
 
+/-- Cache key = the file's actual import list. (Keying on the header
+syntax's reprint collided across different import lists, so a file traced
+after a warmup file was elaborated with the warmup file's environment and
+its notation failed to parse.) -/
+def headerKey (input : String) : String :=
+  let lines := input.splitOn "\n" |>.map (·.trimAscii.toString)
+  let imports := lines.filter (fun l => l.startsWith "import " || l.startsWith "public import ")
+  " ".intercalate imports
+
 def traceInput (file : String) (input : String) (cache : IO.Ref HeaderCache) : IO TraceResult := do
   let t0 ← IO.monoMsNow
   let inputCtx := Parser.mkInputContext input file
   let (header, parserState, messages) ← Parser.parseHeader inputCtx
-  let key := toString header.raw.reprint
+  let key := headerKey input
   let c ← cache.get
   let (env, messages, cached) ← match c.env? with
     | some env => if c.key == key then pure (env, messages, true) else do

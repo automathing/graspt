@@ -203,6 +203,15 @@ td code { font-family: var(--mono); overflow-wrap: anywhere; }
 #chat-form button { border-radius: 999px; padding-inline: 20px; }
 .verified { color: var(--green); font-weight: 750; }
 .unverified { color: var(--amber); font-weight: 750; }
+.chat-msg { padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius-md); margin-bottom: 8px; background: var(--surface); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; }
+.chat-msg.human { background: #eef5f1; }
+.chat-msg.system { color: var(--ink-soft); background: var(--surface-warm); font-size: 12.5px; }
+.chat-msg.verified-msg { border-color: var(--green); background: var(--green-bg); }
+.chat-msg.candidate { display: flex; flex-direction: column; gap: 7px; }
+.chat-msg.candidate code { font: 650 13px var(--mono); overflow-wrap: anywhere; }
+.chat-msg.candidate span { color: var(--muted); font-size: 12px; }
+.try-btn { align-self: flex-start; min-height: 34px; padding: 5px 12px; font-size: 13px; }
+.try-btn:disabled { opacity: .6; cursor: wait; }
 
 /* Entry points */
 .entry-panel { padding: 26px clamp(16px, 3vw, 36px) 8px; }

@@ -128,7 +128,11 @@ export function chatPrompt(p: Position, question: string): string {
     '',
     `Human: ${question}`,
     '',
-    'If you suggest tactics, ALSO append a JSON array on its own last line, e.g. [{"tactic": "apply Foo.bar", "rationale": "unifies with the target"}]. Suggestions are unverified until Lean checks them — say so.',
+    'Answer in three short parts, in this order, plainly enough for someone who does not write Lean:',
+    '1. "Where you are" — what this place/goal means in ordinary words (one or two sentences, no tactic syntax).',
+    '2. "What combines here" — which nearby landmarks or ideas could plausibly move this goal, and why, citing graph nodes.',
+    '3. "My suggestion" — the single best next tactic and what Lean will check when the human presses Try. If no tactic is plausible, say so instead of inventing one.',
+    'Keep the whole answer under ~150 words. If you suggest tactics, ALSO append a JSON array on its own last line, e.g. [{"tactic": "apply Foo.bar", "rationale": "unifies with the target"}]. Suggestions are unverified until Lean checks them — say so.',
   ].filter(Boolean).join('\n');
 }
 

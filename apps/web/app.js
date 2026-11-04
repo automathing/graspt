@@ -262,19 +262,66 @@ $('#clear-key').addEventListener('click', async () => {
   refreshAgentStatus();
 });
 
+function appendChat(cls, html) {
+  const log = $('#chat-log');
+  const placeholder = log.querySelector('.chat-placeholder');
+  if (placeholder) placeholder.remove();
+  const div = document.createElement('div');
+  div.className = `chat-msg ${cls}`;
+  div.innerHTML = html;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+
+async function applyTactic(tactic, btn) {
+  if (!currentDecl) { appendChat('system', 'Open a declaration and stand on its frontier first — then I can have Lean check a tactic there.'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Lean is checking…'; }
+  appendChat('system', `Asking Lean to check <code>${esc(tactic)}</code> at <b>${esc(currentDecl)}</b>…`);
+  try {
+    const r = await api(`/api/repos/${encodeURIComponent(repoId)}/apply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decl: currentDecl, goal: currentGoal || undefined, tactic }) });
+    if (!r || r.error) { appendChat('system', `Could not apply: ${esc((r && r.error) || 'empty response')}`); return; }
+    appendChat(r.ok ? 'verified-msg' : 'system', `${esc(r.explanation)}`);
+    if (r.ok && r.map) {
+      currentMap = r.map;
+      $('#proof-stats').textContent = `${currentMap.stats.steps} steps · ${currentMap.stats.goals} goals · ${currentMap.stats.frontier} frontier · ${currentMap.stats.landmarks} landmarks`;
+      drawMap();
+      const root = currentMap.nodes.find((n) => n.kind === 'theorem');
+      if (root) selectGoal(root.id);
+      appendChat('system', 'The map above has been redrawn from Lean’s new elaboration. Places you already know stayed put; the frontier you stood on has moved.');
+    }
+  } catch (err) {
+    appendChat('system', `Could not reach the server (${esc(err.message || String(err))}).`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Try this — Lean checks it'; }
+  }
+}
+
 $('#chat-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const q = $('#chat-input').value.trim(); if (!q) return;
-  const log = $('#chat-log');
-  log.textContent = 'Asking Meta AI… (can take up to 120 seconds)';
+  $('#chat-input').value = '';
+  appendChat('human', `<b>You:</b> ${esc(q)}`);
+  const pending = appendChat('system', 'Asking Meta AI…');
   try {
     const r = await api(`/api/repos/${encodeURIComponent(repoId)}/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decl: currentDecl || undefined, goal: currentGoal || undefined, question: q }) });
-    if (!r || r.error) { log.textContent = `Server rejected the request: ${(r && r.error) || 'empty response'}. Try again.`; return; }
-    const cand = (r.candidates && r.candidates.length) ? `\nTactic suggestions (not yet verified by Lean):\n${r.candidates.map((c) => `- ${c.tactic}${c.rationale ? ` (${c.rationale})` : ''}`).join('\n')}` : '';
-    log.innerHTML = `${esc(r.answer)}${esc(cand)}\n<span class="${r.verified ? 'verified' : 'unverified'}">${r.verified ? '✓ citations verified' : 'unverified' + (r.reason ? ` — ${esc(r.reason)}` : '')}</span> <span>— via ${esc(r.agent || 'none')}</span>`;
-    $('#chat-input').value = '';
+    pending.remove();
+    if (!r || r.error) { appendChat('system', `Server rejected the request: ${esc((r && r.error) || 'empty response')}. Try again.`); return; }
+    const badge = `<span class="${r.verified ? 'verified' : 'unverified'}">${r.verified ? '✓ citations verified' : 'unverified' + (r.reason ? ` — ${esc(r.reason)}` : '')}</span> <span>— via ${esc(r.agent || 'none')}</span>`;
+    appendChat('agent', `${esc(r.answer)}\n${badge}`);
+    for (const c of (r.candidates || [])) {
+      const row = appendChat('candidate', `<code>${esc(c.tactic)}</code>${c.rationale ? `<span>${esc(c.rationale)}</span>` : ''}`);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'try-btn';
+      btn.textContent = 'Try this — Lean checks it';
+      btn.addEventListener('click', () => applyTactic(c.tactic, btn));
+      row.appendChild(btn);
+    }
+    if ((r.candidates || []).length) appendChat('system', 'Suggestions are unverified. Pressing Try sends one tactic to Lean; only if Lean accepts it does the map change.');
   } catch (err) {
-    log.textContent = `Could not reach the server (${err && err.message ? err.message : err}). Make sure it is running — npm start -- ./lean — then refresh the page.`;
+    pending.remove();
+    appendChat('system', `Could not reach the server (${esc(err && err.message ? err.message : String(err))}). Make sure it is running, then refresh the page.`);
   }
 });
 

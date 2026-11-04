@@ -33,6 +33,7 @@ Pre-indexed demo traces ship in `fixtures/demo/`, so the atlas opens instantly w
 2. **Proof map** — click a declaration: goals, moves (tactics as `Goal → List Goal`), landmarks, frontiers, `≡` loop closures. Places are keyed by canonical `Γ ⊢ T`, never `MVarId`, so re-traces don't move nodes.
 3. **Egocentric panel** — click any goal: its full context plus up to 10 nearest neighbours. Click through them to walk the proof mouse-only.
 4. **Chat + navigator walk** — answers cite graph node IDs and are validated server-side (bad citations are marked unverified); the walk replays tactics Lean actually elaborated. Agent output can never mutate the graph or your files.
+5. **Try a suggestion (demo slice)** — stand on an open frontier (`sorry`), ask the agent, and press **Try this — Lean checks it** on a tactic candidate. The server splices it into a session working copy and re-elaborates with a persistent tracer (~0.1s warm); only if Lean accepts it (no errors, frontier closed) is the map redrawn in place. A rejection explains the diagnostic and leaves the map unchanged. Nothing is written to the opened repo on disk.
 
 ## Layout
 

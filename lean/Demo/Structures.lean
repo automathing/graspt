@@ -27,8 +27,8 @@ theorem two_mul_le_add_sq (a b : ℝ) : 2 * a * b ≤ a ^ 2 + b ^ 2 := by
 theorem dvd_add_of_dvd (a b c : ℕ) (hab : a ∣ b) (hac : a ∣ c) : a ∣ b + c := by
   exact Nat.dvd_add hab hac
 
-/-- A frontier left open: every natural has a prime divisor or is 0/1 territory. -/
-theorem exists_prime_dvd (n : ℕ) : ∃ p, Nat.Prime p ∧ p ∣ n := by
+/-- A frontier left open for exploration: any `n ≠ 1` has a prime divisor. -/
+theorem exists_prime_dvd (n : ℕ) (hn : n ≠ 1) : ∃ p, Nat.Prime p ∧ p ∣ n := by
   sorry
 
 end Demo.Structures

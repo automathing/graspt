@@ -7,6 +7,8 @@ import { resolvePositions, LayoutStore } from '../../packages/core/layout';
 import { answerChat, navigatorWalk } from './chat';
 import { metaStatus, setMetaApiKey, setModel, metaModel, extractApiKey, extractModel } from './meta';
 import { setupStatus, installLean, fetchMathlib, generateAtlas, demoReady, defaultStoreDir, getSetupJob } from './setup';
+import { cleanTactic, findSorryStep, judgeApplication, replaceRange, sorryCount } from './splice';
+import { traceClient } from './trace-client';
 import { cloneAndIngest } from './ingest';
 import { ingestFolder, getJob, listJobs } from './ingest';
 
@@ -18,6 +20,16 @@ export function createServer(opts: ServerOptions) {
   const repos = new Map<string, Repo>();
   const demo = loadDemoRepo();
   repos.set(demo.id, demo);
+  // Session working copies: repoId:file -> source after verified splices.
+  // The opened repo on disk is never written; only Lean-verified content
+  // replaces the in-memory source, and the map is redrawn from its trace.
+  const sourceOverrides = new Map<string, string>();
+  const sourceFor = (repo: Repo, file: string): string | undefined => {
+    const override = sourceOverrides.get(`${repo.id}:${file}`);
+    if (override !== undefined) return override;
+    const base = repo.source === 'demo' ? path.join(packageRoot(), 'lean') : repo.root;
+    try { return fs.readFileSync(path.join(base, file), 'utf8'); } catch { return undefined; }
+  };
   const storeDir = opts.storeDir ?? defaultStoreDir();
   loadAtlasCache(storeDir);
   const layoutStore = new LayoutStore();
@@ -138,6 +150,53 @@ export function createServer(opts: ServerOptions) {
       if (req.method === 'GET' && seg[3] === 'walk' && repo) {
         const walk = navigatorWalk(repo, seg[4], url.searchParams.get('goal') ?? undefined);
         send(res, walk ? 200 : 404, walk ?? { error: 'no walk' }); return;
+      }
+      // POST /api/repos/:id/apply {decl, goal?, tactic} — the verified action:
+      // splice the candidate over the frontier sorry in the session working
+      // copy, re-elaborate with the warm tracer, and only on Lean's acceptance
+      // replace the repo trace so the proof map redraws from new facts.
+      if (req.method === 'POST' && seg[3] === 'apply' && repo) {
+        const body = JSON.parse((await readBody(req)) || '{}') as { decl?: string; goal?: string; tactic?: string };
+        if (!body.decl || !body.tactic) { send(res, 400, { error: 'decl and tactic required' }); return; }
+        let tactic: string;
+        try { tactic = cleanTactic(body.tactic); } catch (e) { send(res, 400, { error: e instanceof Error ? e.message : String(e) }); return; }
+        const trace = repo.traces.find((t) => t.decls.some((d) => d.name === body.decl));
+        const decl = trace?.decls.find((d) => d.name === body.decl);
+        if (!trace || !decl) { send(res, 404, { error: `unknown declaration ${body.decl}` }); return; }
+        const step = findSorryStep(decl, body.goal);
+        if (!step) { send(res, 400, { error: `${body.decl} has no open frontier (sorry) to apply a tactic at in this demo slice` }); return; }
+        const source = sourceFor(repo, trace.file);
+        if (source === undefined) { send(res, 400, { error: `no Lean source available for ${trace.file} in this session` }); return; }
+        let nextSource: string;
+        try { nextSource = replaceRange(source, step, tactic); } catch (e) { send(res, 400, { error: e instanceof Error ? e.message : String(e) }); return; }
+        const beforeSorries = sorryCount(decl);
+        try {
+          const after = await traceClient().trace(trace.file, nextSource);
+          const verdict = judgeApplication(decl, after, body.decl);
+          if (!verdict.ok) {
+            send(res, 200, {
+              ok: false, verified: false, decl: body.decl, tactic,
+              explanation: `Lean rejected \`${tactic}\` at ${body.decl}. The map is unchanged — nothing was written. Diagnostics: ${verdict.diagnostics.join(' | ')}`,
+              diagnostics: verdict.diagnostics,
+            });
+            return;
+          }
+          const idx = repo.traces.indexOf(trace);
+          if (idx >= 0) repo.traces[idx] = after;
+          sourceOverrides.set(`${repo.id}:${trace.file}`, nextSource);
+          const afterDecl = after.decls.find((d) => d.name === body.decl);
+          const map = proofMapFor(repo, body.decl);
+          const saved = layoutStore.loadLayout(layoutRootFor(repo.id), body.decl);
+          const positions = map ? resolvePositions(map.nodes, map.edges, { ...saved }) : undefined;
+          send(res, 200, {
+            ok: true, verified: true, decl: body.decl, tactic,
+            explanation: `Lean accepted \`${tactic}\` at ${body.decl}. Open frontiers in this declaration went from ${beforeSorries} to ${sorryCount(afterDecl)}; the map has been redrawn from the new elaboration, and every other place stayed where it was.`,
+            map: map ? { ...map, positions } : undefined,
+          });
+        } catch (e) {
+          send(res, 200, { ok: false, verified: false, decl: body.decl, tactic, explanation: `The tracer could not check \`${tactic}\`: ${e instanceof Error ? e.message : String(e)}`, diagnostics: [e instanceof Error ? e.message : String(e)] });
+        }
+        return;
       }
       // POST /api/repos/:id/chat {decl, goal?, question} — answered by the real agent CLI
       if (req.method === 'POST' && seg[3] === 'chat' && repo) {
